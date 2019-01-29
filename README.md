@@ -36,6 +36,7 @@ at_device package 遵循 Apache 2.0 许可，详见 `LICENSE` 文件。
 - int: 数值
 
 |宏|类型|功能|
+|--|--|--|
 |PKG_USING_RW007|bool|开启rw007驱动，使用该软件包则需要定义该宏|
 |RW007_USING_STM32_DRIVERS|bool|使能STM32平台移植示例|
 |RW007_USING_IMXRT_DRIVERS|bool|使能IMXRT平台移植示例|
