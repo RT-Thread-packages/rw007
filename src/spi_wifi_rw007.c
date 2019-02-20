@@ -31,6 +31,7 @@
 
 /********************************* RW007 **************************************/
 #include "spi_wifi_rw007.h"
+#include <wlan_port.h>
 
 static struct rw007_wifi rw007_wifi_device;
 static struct rt_event spi_wifi_data_event;
@@ -61,25 +62,7 @@ static void resp_handler(struct rw007_wifi *wifi_device, struct rw007_resp *resp
             if (ap_scan != RT_NULL)
             {
                 memcpy(&ap_scan[wifi_device->ap_scan_count], &resp->resp.ap_info, sizeof(rw007_ap_info));
-
-#if defined(DBG_ENABLE)
-                {
-                    rw007_ap_info *ap_info = &resp->resp.ap_info;
-
-                    LOG_D("SCAN SSID:%-32.32s", ap_info->ssid);
-                    LOG_D("SCAN BSSID:%02X-%02X-%02X-%02X-%02X-%02X",
-                          ap_info->bssid[0],
-                          ap_info->bssid[1],
-                          ap_info->bssid[2],
-                          ap_info->bssid[3],
-                          ap_info->bssid[4],
-                          ap_info->bssid[5]);
-                    LOG_D("SCAN rssi:%ddBm", ap_info->rssi);
-                    LOG_D("SCAN rate:%dMbps", ap_info->max_data_rate / 1000);
-                    LOG_D("SCAN channel:%d", ap_info->channel);
-                    LOG_D("SCAN security:%08X", ap_info->security);
-                }
-#endif
+                scan_results_handler(&resp->resp.ap_info);
                 wifi_device->ap_scan_count++;
                 wifi_device->ap_scan = ap_scan;
             }
@@ -99,43 +82,16 @@ static void resp_handler(struct rw007_wifi *wifi_device, struct rw007_resp *resp
         {
             memcpy(&wifi_device->ap_info, &resp_return->resp.ap_info, sizeof(rw007_resp_join));
             wifi_device->active = 1;
-            eth_device_linkchange(&wifi_device->parent, RT_TRUE);
+            join_events_handler(WIFI_EVENT_LINK_UP);
         }
         else
         {
             wifi_device->active = 1;
-            eth_device_linkchange(&wifi_device->parent, RT_FALSE);
-            LOG_I("RW007_CMD_EASY_JOIN result: %d", resp->result);
+            join_events_handler(WIFI_EVENT_DISASSOC_IND);
         }
-        {
-            rw007_ap_info *ap_info = &resp->resp.ap_info;
-            wifi_device->ap_info = *ap_info;
-#if defined(DBG_ENABLE)
-            
 
-            if(ap_info->channel == 0)
-            {
-                rt_kprintf("[RW007] WIFI Connect failed!\n");
-            }
-            else
-            {
-                rt_kprintf("[RW007] WIFI Connected!\n");
-                LOG_D("JOIN SSID:%-32.32s", ap_info->ssid);
-                LOG_D("JOIN BSSID:%02X-%02X-%02X-%02X-%02X-%02X",
-                    ap_info->bssid[0],
-                    ap_info->bssid[1],
-                    ap_info->bssid[2],
-                    ap_info->bssid[3],
-                    ap_info->bssid[4],
-                    ap_info->bssid[5]);
-                LOG_D("JOIN rssi:%ddBm", ap_info->rssi);
-                LOG_D("JOIN rate:%dMbps", ap_info->max_data_rate / 1000);
-                LOG_D("JOIN channel:%d", ap_info->channel);
-                LOG_D("JOIN security:%08X", ap_info->security);
-                
-            }
-#endif
-        }
+        wifi_device->ap_info = resp->resp.ap_info;
+
         break;
 
     case RW007_CMD_RSSI:
@@ -150,7 +106,7 @@ static void resp_handler(struct rw007_wifi *wifi_device, struct rw007_resp *resp
         if (resp->result == 0)
         {
             wifi_device->active = 1;
-            eth_device_linkchange(&wifi_device->parent, RT_TRUE);
+            LOG_I("softap setup");
         }
         else
         {
@@ -270,7 +226,6 @@ _exit:
 
 static rt_err_t spi_wifi_transfer(struct rw007_wifi *dev)
 {
-    struct pbuf *p = RT_NULL;
     struct spi_cmd_request cmd;
     struct spi_response resp;
 
@@ -387,11 +342,7 @@ static rt_err_t spi_wifi_transfer(struct rw007_wifi *dev)
 
                 if (wifi_device->active)
                 {
-                    p = pbuf_alloc(PBUF_LINK, data_packet->data_len, PBUF_RAM);
-                    pbuf_take(p, (rt_uint8_t *)data_packet->buffer, data_packet->data_len);
-
-                    rt_mb_send(&wifi_device->eth_rx_mb, (rt_uint32_t)p);
-                    eth_device_ready((struct eth_device *)dev);
+                    wlan_report_data((void *)data_packet->buffer, data_packet->data_len);
                 }
             }
             else if (data_packet->data_type == data_type_resp)
@@ -457,7 +408,7 @@ static rt_err_t rw007_wifi_control(rt_device_t dev, int cmd, void *args)
 }
 
 /* transmit packet. */
-rt_err_t rw007_wifi_tx(rt_device_t dev, struct pbuf *p)
+rt_err_t rw007_wifi_tx(rt_device_t dev, uint8_t *pbuffer, rt_size_t len)
 {
     rt_err_t result = RT_EOK;
     struct spi_data_packet *data_packet;
@@ -473,9 +424,9 @@ rt_err_t rw007_wifi_tx(rt_device_t dev, struct pbuf *p)
     if (data_packet != RT_NULL)
     {
         data_packet->data_type = data_type_eth_data;
-        data_packet->data_len = p->tot_len;
+        data_packet->data_len = len;
 
-        pbuf_copy_partial(p, data_packet->buffer, data_packet->data_len, 0);
+        rt_memcpy(data_packet->buffer, pbuffer, data_packet->data_len);
 
         rt_mb_send(&wifi_device->spi_tx_mb, (rt_uint32_t)data_packet);
         rt_event_send(&spi_wifi_data_event, 1);
@@ -487,19 +438,6 @@ rt_err_t rw007_wifi_tx(rt_device_t dev, struct pbuf *p)
     return result;
 }
 
-/* reception packet. */
-struct pbuf *rw007_wifi_rx(rt_device_t dev)
-{
-    struct pbuf *p = RT_NULL;
-    struct rw007_wifi *wifi_device = (struct rw007_wifi *)dev;
-
-    if (rt_mb_recv(&wifi_device->eth_rx_mb, (rt_ubase_t *)&p, 0) != RT_EOK)
-    {
-        return RT_NULL;
-    }
-
-    return p;
-}
 /********************************* RT-Thread Ethernet interface end **************************************/
 
 static void spi_wifi_data_thread_entry(void *parameter)
@@ -530,13 +468,14 @@ static void spi_wifi_data_thread_entry(void *parameter)
 
 #ifdef RT_USING_DEVICE_OPS
 const static struct rt_device_ops rw007_ops =
-    {
-        rw007_wifi_init,
-        rw007_wifi_open,
-        rw007_wifi_close,
-        rw007_wifi_read,
-        rw007_wifi_write,
-        rw007_wifi_control};
+{
+    rw007_wifi_init,
+    rw007_wifi_open,
+    rw007_wifi_close,
+    rw007_wifi_read,
+    rw007_wifi_write,
+    rw007_wifi_control
+};
 #endif
 
 rt_err_t rt_hw_wifi_init(const char *spi_device_name, wifi_mode_t mode)
@@ -565,19 +504,17 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name, wifi_mode_t mode)
     }
 
 #ifdef RT_USING_DEVICE_OPS
-    rw007_wifi_device.parent.parent.ops = &rw007_ops;
+    rw007_wifi_device.parent.ops = &rw007_ops;
 #else
-    rw007_wifi_device.parent.parent.init = rw007_wifi_init;
-    rw007_wifi_device.parent.parent.open = rw007_wifi_open;
-    rw007_wifi_device.parent.parent.close = rw007_wifi_close;
-    rw007_wifi_device.parent.parent.read = rw007_wifi_read;
-    rw007_wifi_device.parent.parent.write = rw007_wifi_write;
-    rw007_wifi_device.parent.parent.control = rw007_wifi_control;
+    rw007_wifi_device.parent.init = rw007_wifi_init;
+    rw007_wifi_device.parent.open = rw007_wifi_open;
+    rw007_wifi_device.parent.close = rw007_wifi_close;
+    rw007_wifi_device.parent.read = rw007_wifi_read;
+    rw007_wifi_device.parent.write = rw007_wifi_write;
+    rw007_wifi_device.parent.control = rw007_wifi_control;
 #endif
-    rw007_wifi_device.parent.parent.user_data = RT_NULL;
-
-    rw007_wifi_device.parent.eth_rx = rw007_wifi_rx;
-    rw007_wifi_device.parent.eth_tx = rw007_wifi_tx;
+    rw007_wifi_device.parent.type = RT_Device_Class_Miscellaneous;
+    rw007_wifi_device.parent.user_data = RT_NULL;
 
     rt_mp_init(&rw007_wifi_device.spi_tx_mp,
                "spi_tx",
@@ -594,12 +531,6 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name, wifi_mode_t mode)
     rt_mb_init(&rw007_wifi_device.spi_tx_mb,
                "spi_tx",
                &rw007_wifi_device.spi_tx_mb_pool[0],
-               SPI_TX_POOL_SIZE,
-               RT_IPC_FLAG_PRIO);
-
-    rt_mb_init(&rw007_wifi_device.eth_rx_mb,
-               "eth_rx",
-               &rw007_wifi_device.eth_rx_mb_pool[0],
                SPI_TX_POOL_SIZE,
                RT_IPC_FLAG_PRIO);
 
@@ -636,9 +567,8 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name, wifi_mode_t mode)
                            (void *)&init); // 0: firmware, 1: STA, 2:AP
     }
 
-    /* register eth device */
-    eth_device_init(&(rw007_wifi_device.parent), "w0");
-    eth_device_linkchange(&rw007_wifi_device.parent, RT_FALSE);
+    /* register device */
+    rt_device_register(&(rw007_wifi_device.parent), "w0", RT_DEVICE_FLAG_RDWR);
 
     return RT_EOK;
 }
@@ -652,27 +582,6 @@ void spi_wifi_isr(int vector)
 
     /* leave interrupt */
     rt_interrupt_leave();
-}
-
-/********************************* RW007 tools **************************************/
-rt_err_t rw007_join(const char *SSID, const char *passwd)
-{
-    rt_err_t result;
-    rt_device_t wifi_device;
-    rw007_cmd_easy_join easy_join;
-
-    wifi_device = rt_device_find("w0");
-    if (wifi_device == RT_NULL)
-        return -RT_ENOSYS;
-
-    strncpy(easy_join.ssid, SSID, sizeof(easy_join.ssid));
-    strncpy(easy_join.passwd, passwd, sizeof(easy_join.passwd));
-
-    result = rt_device_control(wifi_device,
-                               RW007_CMD_EASY_JOIN,
-                               (void *)&easy_join);
-
-    return result;
 }
 
 rt_err_t rw007_softap(const char *SSID, const char *passwd, uint32_t security, uint32_t channel)
@@ -731,50 +640,3 @@ int32_t rw007_rssi(void)
     return (-1);
 }
 
-#ifdef RT_USING_FINSH
-#include <finsh.h>
-
-static rt_err_t rw007_scan(void)
-{
-    rt_err_t result;
-    struct rw007_wifi *wifi_device;
-
-    wifi_device = (struct rw007_wifi *)rt_device_find("w0");
-
-    rt_kprintf("being scan \n");
-    result = rt_device_control((rt_device_t)wifi_device,
-                               RW007_CMD_SCAN,
-                               RT_NULL);
-
-    rt_kprintf("scan result:%d", result);
-
-    if (result == RT_EOK)
-    {
-        uint32_t i;
-        rw007_ap_info *ap_info;
-
-        for (i = 0; i < wifi_device->ap_scan_count; i++)
-        {
-            ap_info = &wifi_device->ap_scan[i];
-            rt_kprintf("AP #%02d SSID: %-32.32s\n", i, ap_info->ssid);
-        }
-    }
-
-    return result;
-}
-
-static int wifi_join(int argc, char *args[])
-{
-    if (argc != 3)
-        return -1;
-    return rw007_join(args[1], args[2]);
-}
-
-FINSH_FUNCTION_EXPORT(rw007_scan, SACN and list AP.);
-FINSH_FUNCTION_EXPORT(rw007_join, RW007 join to AP.);
-FINSH_FUNCTION_EXPORT(rw007_rssi, get RW007 current AP rssi.);
-
-MSH_CMD_EXPORT(wifi_join, wifi_join);
-MSH_CMD_EXPORT(rw007_rssi, rw007_rssi);
-MSH_CMD_EXPORT(rw007_scan, rw007_scan);
-#endif
