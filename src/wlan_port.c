@@ -5,6 +5,7 @@
  *
  * Change Logs:
  * Date           Author       Notes
+ * 2019-02-20     zyh          first version
  */
 
 #include <rtthread.h>
@@ -106,24 +107,17 @@ void scan_results_handler(rw007_ap_info * record)
 
 void join_events_handler(rt_uint32_t event_type)
 {
-
     switch (event_type)
     {
     case WIFI_EVENT_LINK_UP:
-    {
         /* report connect event */
         rt_wlan_dev_indicate_event_handle(wifi_sta.wlan, RT_WLAN_DEV_EVT_CONNECT, RT_NULL);
         break;
-    }
     case WIFI_EVENT_DISASSOC_IND:
-    {
         rt_wlan_dev_indicate_event_handle(wifi_sta.wlan, RT_WLAN_DEV_EVT_DISCONNECT, RT_NULL);
         break;
-    }
     default :
-    {
         break;
-    }
     }
 }
 
@@ -149,7 +143,6 @@ static rt_err_t wlan_init(struct rt_wlan_device *wlan)
         ret = RT_EOK;
     }
     ret = rt_hw_wifi_init("wspi",MODE_STATION);
-
     /* check result */
     if (ret == RT_EOK)
     {
@@ -219,7 +212,6 @@ static rt_err_t wlan_scan(struct rt_wlan_device *wlan, struct rt_scan_info *scan
     result = rt_device_control((rt_device_t)wifi_device,
                                RW007_CMD_SCAN,
                                RT_NULL);
-
     if (result == RT_EOK)
     {
         uint32_t i;
@@ -278,7 +270,6 @@ static rt_err_t wlan_join(struct rt_wlan_device *wlan, struct rt_sta_info *sta_i
     result = rt_device_control(wifi_device,
                                RW007_CMD_EASY_JOIN,
                                (void *)&easy_join);
-
     /* check result */
     if (result == RT_EOK)
     {
