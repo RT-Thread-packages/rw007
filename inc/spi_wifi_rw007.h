@@ -220,8 +220,7 @@ extern rt_bool_t spi_wifi_is_busy(void);
 /* export API. */
 extern rt_err_t rt_hw_wifi_init(const char *spi_device_name, wifi_mode_t mode);
 extern int32_t rw007_rssi(void);
-extern rt_err_t rw007_join(const char *SSID, const char *passwd);
 extern rt_err_t rw007_softap(const char *SSID, const char *passwd, uint32_t security, uint32_t channel);
-
+extern rt_err_t rw007_wifi_tx(rt_device_t dev, uint8_t *pbuffer, rt_size_t len);
 
 #endif // SPI_WIFI_H_INCLUDED

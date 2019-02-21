@@ -45,10 +45,7 @@ INIT_APP_EXPORT(wifi_spi_device_init);
 static void int_wifi_irq(void * p)
 {
     ((void)p);
-    //if(rt_pin_read(RW007_INT_BUSY_PIN))
-    {
-        spi_wifi_isr(0);
-    }
+    spi_wifi_isr(0);
 }
 
 void spi_wifi_hw_init(void)

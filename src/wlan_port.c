@@ -127,54 +127,6 @@ void join_events_handler(rt_uint32_t event_type)
     }
 }
 
-void softap_event_handler(rt_uint32_t event_type)
-{
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
-    
-//     struct rt_wlan_info info;
-//     struct rt_wlan_buff buff;
-
-//     /* rw007 not support */
-//     LOG_E("%s at line:%d be called", __func__, __LINE__);
-
-//     switch (event_type)
-//     {
-//     case WIFI_EVENT_ASSOC_IND:
-//     case WIFI_EVENT_REASSOC_IND:
-//     {
-//         INVALID_INFO(&info);
-// #if 0
-//         /* copy sta mac addr */
-//         memcpy(info.bssid, event_header->addr.octet, 6);
-// #endif
-//         buff.data = &info;
-//         buff.len = sizeof(info);
-//         rt_wlan_dev_indicate_event_handle(wifi_ap.wlan, RT_WLAN_DEV_EVT_AP_ASSOCIATED, &buff);
-//         break;
-//     }
-//     case WIFI_EVENT_DEAUTH_IND:
-//     case WIFI_EVENT_DISASSOC_IND:
-//     case WIFI_EVENT_DEAUTH:
-//     case WIFI_EVENT_DISASSOC:
-//     {
-//         INVALID_INFO(&info);
-// #if 0
-//         /* copy sta mac addr */
-//         memcpy(info.bssid, event_header->addr.octet, 6);
-// #endif
-//         buff.data = &info;
-//         buff.len = sizeof(info);
-//         rt_wlan_dev_indicate_event_handle(wifi_ap.wlan, RT_WLAN_DEV_EVT_AP_DISASSOCIATED, &buff);
-//         break;
-//     }
-//     default:
-//     {
-//         break;
-//     }
-//     }
-}
-
 static rt_err_t wlan_init(struct rt_wlan_device *wlan)
 {
     rt_err_t ret = -RT_EIO;
@@ -196,12 +148,12 @@ static rt_err_t wlan_init(struct rt_wlan_device *wlan)
         /* this wlan already inited */
         ret = RT_EOK;
     }
-    rt_hw_wifi_init("wspi",MODE_STATION);
+    ret = rt_hw_wifi_init("wspi",MODE_STATION);
 
-    wifi->status = WIFI_INITED;
     /* check result */
-    if (1)
+    if (ret == RT_EOK)
     {
+        wifi->status = WIFI_INITED;
         ret = RT_EOK;
     }
 
@@ -212,9 +164,6 @@ static rt_err_t wlan_mode(struct rt_wlan_device *wlan, rt_wlan_mode_t mode)
 {
     struct wifi *wifi;
     rt_err_t ret = RT_EOK;
-
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
 
     if (wlan == RT_NULL)
     {
@@ -236,12 +185,6 @@ static rt_err_t wlan_mode(struct rt_wlan_device *wlan, rt_wlan_mode_t mode)
     {
         /* set wifi ap mode */
         wifi->interface = WIFI_AP_INTERFACE;
-    }
-
-    /* check result */
-    if (1)
-    {
-        ret = RT_EOK;
     }
 
     return ret;
@@ -350,8 +293,7 @@ static rt_err_t wlan_softap(struct rt_wlan_device *wlan, struct rt_ap_info *ap_i
     rt_err_t ret = RT_EOK;
     struct wifi *wifi;
 
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     if ((wlan == RT_NULL) || (ap_info == RT_NULL))
     {
@@ -387,8 +329,7 @@ static rt_err_t wlan_disconnect(struct rt_wlan_device *wlan)
     rt_err_t ret;
     struct wifi *wifi;
 
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     if (wlan == RT_NULL)
     {
@@ -423,8 +364,7 @@ static rt_err_t wlan_ap_stop(struct rt_wlan_device *wlan)
     struct wifi *wifi;
     rt_err_t ret;
 
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     if (wlan == RT_NULL)
     {
@@ -458,8 +398,7 @@ static rt_err_t wlan_ap_deauth(struct rt_wlan_device *wlan, rt_uint8_t mac[])
 {
     struct wifi *wifi;
 
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     if (wlan == RT_NULL)
     {
@@ -486,8 +425,7 @@ static rt_err_t wlan_scan_stop(struct rt_wlan_device *wlan)
 {
     struct wifi *wifi;
 
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     if (wlan == RT_NULL)
     {
@@ -510,7 +448,6 @@ static int wlan_get_rssi(struct rt_wlan_device *wlan)
     int32_t rssi = 0;
     struct wifi *wifi;
 
-    /* rw007 not support */
     LOG_E("%s at line:%d be called", __func__, __LINE__);
 
     if (wlan == RT_NULL)
@@ -539,8 +476,7 @@ static rt_err_t wlan_set_powersave(struct rt_wlan_device *wlan, int level)
 {
     rt_err_t ret;
 
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     if (level)
     {
@@ -564,8 +500,7 @@ static int wlan_get_powersave(struct rt_wlan_device *wlan)
 {
     int level = 0;
 
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     /* get power save level */
     level = level;
@@ -575,8 +510,7 @@ static int wlan_get_powersave(struct rt_wlan_device *wlan)
 
 static rt_err_t wlan_cfg_promisc(struct rt_wlan_device *wlan, rt_bool_t start)
 {
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     if (start == RT_TRUE)
     {
@@ -592,8 +526,7 @@ static rt_err_t wlan_cfg_promisc(struct rt_wlan_device *wlan, rt_bool_t start)
 
 static rt_err_t wlan_cfg_filter(struct rt_wlan_device *wlan, struct rt_wlan_filter *filter)
 {
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     if (filter == RT_NULL)
     {
@@ -607,8 +540,7 @@ static rt_err_t wlan_cfg_filter(struct rt_wlan_device *wlan, struct rt_wlan_filt
 
 static rt_err_t wlan_set_channel(struct rt_wlan_device *wlan, int channel)
 {
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     if (channel < 0)
     {
@@ -624,8 +556,7 @@ static int wlan_get_channel(struct rt_wlan_device *wlan)
 {
     int channel = -1;
 
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     /* get channel */
     channel = channel;
@@ -635,8 +566,7 @@ static int wlan_get_channel(struct rt_wlan_device *wlan)
 
 static rt_err_t wlan_set_country(struct rt_wlan_device *wlan, rt_country_code_t country_code)
 {
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
     
     if (country_code == RT_COUNTRY_UNKNOWN)
     {
@@ -652,8 +582,7 @@ static rt_country_code_t wlan_get_country(struct rt_wlan_device *wlan)
 {
     rt_country_code_t country_code = RT_COUNTRY_UNKNOWN;
 
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     /* get country code */
     country_code = country_code;
@@ -663,8 +592,7 @@ static rt_country_code_t wlan_get_country(struct rt_wlan_device *wlan)
 
 static rt_err_t wlan_set_mac(struct rt_wlan_device *wlan, rt_uint8_t mac[])
 {
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     if (mac == RT_NULL)
     {
@@ -697,8 +625,7 @@ static int wlan_recv(struct rt_wlan_device *wlan, void *buff, int len)
 {
     /* not always need to implement this interface */
 
-    /* rw007 not support */
-    LOG_E("%s at line:%d be called", __func__, __LINE__);
+    LOG_W("%s at line:%d be called", __func__, __LINE__);
 
     return RT_EOK;
 }
@@ -718,13 +645,13 @@ static int wlan_send(struct rt_wlan_device *wlan, void *buff, int len)
     }
 
     /* not ready */
-    if (0)
+    if (!dev)
     {
         return -RT_ERROR;
     }
 
     /* tx package */
-    extern rt_err_t rw007_wifi_tx(rt_device_t dev, uint8_t *pbuffer, rt_size_t len);
+    
     rw007_wifi_tx(dev, buff, len);
 
     return RT_EOK;
