@@ -37,7 +37,8 @@ int wifi_spi_device_init(void)
 {
     set_rw007_mode(RW007_SPI_MODE);
     stm32_spi_bus_attach_device(RW007_CS_PIN, RW007_SPI_BUS_NAME, "wspi");
-    rt_hw_wifi_init("wspi",MODE_STATION);
+    rt_hw_wifi_init("wspi");
+    rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);
 }
 INIT_APP_EXPORT(wifi_spi_device_init);
     
