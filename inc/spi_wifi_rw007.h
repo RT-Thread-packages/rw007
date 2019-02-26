@@ -52,11 +52,14 @@ struct spi_response
 
 typedef enum
 {
-    data_type_eth_data = 0,
+    data_type_sta_eth_data = 0,
+    data_type_ap_eth_data = 0,
+    data_type_promisc_data = 0,
     data_type_cmd,
     data_type_resp,
-    data_type_status,
-} app_data_type_typedef;
+    data_type_cb,
+}
+app_data_type_typedef;
 
 struct spi_data_packet
 {
@@ -78,86 +81,43 @@ typedef enum
     MODE_SOFTAP = 1,
 } wifi_mode_t;
 
-typedef struct _rw007_ap_info
+typedef struct rw00x_ap_info_value
 {
-    char ssid[SSID_NAME_LENGTH_MAX];
-    uint8_t bssid[8];       // 6byte + 2byte PAD.
-    int rssi;               /* Receive Signal Strength Indication in dBm. */
-    uint32_t max_data_rate; /* Maximum data rate in kilobits/s */
-    uint32_t security;      /* Security type  */
-    uint32_t channel;       /* Radio channel that the AP beacon was received on   */
-} rw007_ap_info;
-
-typedef struct _rw007_cmd_init
-{
-    uint32_t mode;
-} rw007_cmd_init;
-
-typedef struct _rw007_resp_init
-{
-    uint8_t mac[8];   // 6byte + 2byte PAD.
-    uint8_t sn[24];   // serial.
-    char version[16]; // firmware version.
-} rw007_resp_init;
-
-typedef struct _rw007_cmd_easy_join
-{
-    char ssid[SSID_NAME_LENGTH_MAX];
+    struct rt_wlan_info info;
     char passwd[PASSWORD_LENGTH_MAX];
-} rw007_cmd_easy_join;
+} * rw00x_ap_info_value_t;
 
-typedef struct _rw007_cmd_join
-{
-    uint8_t bssid[8]; // 6byte + 2byte PAD.
-    char passwd[PASSWORD_LENGTH_MAX];
-} rw007_cmd_join;
-
-typedef struct _rw007_cmd_rssi
-{
-    uint8_t bssid[8]; // 6byte + 2byte PAD.
-} rw007_cmd_rssi;
-
-typedef struct _rw007_cmd_softap
-{
-    char ssid[SSID_NAME_LENGTH_MAX];
-    char passwd[PASSWORD_LENGTH_MAX];
-
-    uint32_t security; /* Security type. */
-    uint32_t channel;  /* Radio channel that the AP beacon was received on   */
-} rw007_cmd_softap;
-
-typedef struct _rw007_resp_join
-{
-    rw007_ap_info ap_info;
-} rw007_resp_join;
-
-struct rw007_cmd
+/* littel endian */
+typedef struct rw00x_cmd
 {
     uint32_t cmd;
     uint32_t len;
 
     /** command body */
-    union {
-        rw007_cmd_init init;
-        rw007_cmd_easy_join easy_join;
-        rw007_cmd_join join;
-        rw007_cmd_rssi rssi;
-        rw007_cmd_softap softap;
-    } params;
-};
+    union
+    {
+        uint32_t int_value;
+        uint8_t mac_value[8];/* padding 2bytes */
+        struct rw00x_ap_info_value ap_info_value;
+        char string_value[UINT16_MAX];
+    } value;
+} * rw00x_cmd_t;
 
-struct rw007_resp
+struct rw00x_resp
 {
     uint32_t cmd;
     uint32_t len;
 
-    int32_t result; // result for CMD.
+    int32_t result; /* result of CMD. */
 
     /** resp Body */
-    union {
-        rw007_resp_init init;
-        rw007_ap_info ap_info;
-    } resp;
+    union
+    {
+        uint32_t int_value;
+        uint8_t mac_value[8];/* padding 2bytes */
+        struct rw00x_ap_info_value ap_info_value;
+        char string_value[UINT16_MAX];
+    } value;
 };
 
 /* tools */
@@ -168,59 +128,72 @@ struct rw007_resp
 #define MAX_SPI_PACKET_SIZE (member_offset(struct spi_data_packet, buffer) + SPI_MAX_DATA_LEN)
 #define MAX_SPI_BUFFER_SIZE (sizeof(struct spi_response) + MAX_SPI_PACKET_SIZE)
 
-struct rw007_wifi
+typedef enum 
 {
-    /* inherit from ethernet device */
-    struct rt_device parent;
+    RW00x_CMD_INIT = 0x00,
+    RW00x_CMD_SET_MODE,
+    RW00x_CMD_MAC_GET,
+    RW00x_CMD_MAC_SET,
+    RW00x_CMD_GET_SN,
+    RW00x_CMD_GET_VSR,
+    RW00x_CMD_SCAN,
+    RW00x_CMD_JOIN,
+    RW00x_CMD_SOFTAP,
+    RW00x_CMD_DISCONNECT,
+    RW00x_CMD_AP_STOP,
+    RW00x_CMD_AP_DEAUTH,
+    RW00x_CMD_SCAN_STOP,
+    RW00x_CMD_GET_RSSI,
+    RW00x_CMD_SET_PWR_SAVE,
+    RW00x_CMD_GET_PWR_SAVE,
+    RW00x_CMD_CFG_PROMISC,
+    RW00x_CMD_CFG_FILTER,
+    RW00x_CMD_SET_CHANNEL,
+    RW00x_CMD_GET_CHANNEL,
+    RW00x_CMD_SET_COUNTRY,
+    RW00x_CMD_GET_COUNTRY,
+    RW00x_CMD_MAX_NUM
+}RW00x_CMD;
 
-    struct rt_spi_device *rt_spi_device;
-
-    /* interface address info. */
-    rt_uint8_t dev_addr[MAX_ADDR_LEN]; /* hw address   */
-    rt_uint8_t active;
+struct rw007_spi
+{
+    struct rt_spi_device *spi_device;
 
     struct rt_mempool spi_tx_mp;
-    struct rt_mempool spi_rx_mp;
 
     struct rt_mailbox spi_tx_mb;
 
     int spi_tx_mb_pool[SPI_TX_POOL_SIZE + 1];
-    int eth_rx_mb_pool[SPI_RX_POOL_SIZE + 1];
 
-    int rw007_cmd_mb_pool[3];
-    struct rt_mailbox rw007_cmd_mb;
-    uint32_t last_cmd;
+    rt_event_t rw007_cmd_event;
 
     ALIGN(4)
     rt_uint8_t spi_tx_mempool[(sizeof(struct spi_data_packet) + 4) * SPI_TX_POOL_SIZE];
-    ALIGN(4)
-    rt_uint8_t spi_rx_mempool[(sizeof(struct spi_data_packet) + 4) * SPI_RX_POOL_SIZE];
 
     ALIGN(4)
     uint8_t spi_hw_rx_buffer[MAX_SPI_BUFFER_SIZE];
-
-    /* status for RW007 */
-    rw007_ap_info ap_info;  /* AP info for conn. */
-    rw007_ap_info *ap_scan; /* AP list for SCAN. */
-    uint32_t ap_scan_count;
+    struct rw00x_resp * resp[RW00x_CMD_MAX_NUM];
 };
 
-#define RW007_CMD_INIT 128
-#define RW007_CMD_SCAN 129
-#define RW007_CMD_JOIN 130
-#define RW007_CMD_EASY_JOIN 131
-#define RW007_CMD_RSSI 132
-#define RW007_CMD_SOFTAP 133
+struct rw007_wifi
+{
+    /* inherit from ethernet device */
+    struct rt_wlan_device *wlan;
+
+    struct rw007_spi * hspi;
+};
+
+
+#define RW00x_CMD_RESP_EVENT(n)     (0x01UL << n)
 
 /* porting */
 extern void spi_wifi_hw_init(void);
 extern void spi_wifi_int_cmd(rt_bool_t cmd);
 extern rt_bool_t spi_wifi_is_busy(void);
 
-/* export API. */
-extern rt_err_t rt_hw_wifi_init(const char *spi_device_name, wifi_mode_t mode);
-extern int32_t rw007_rssi(void);
-extern rt_err_t rw007_softap(const char *SSID, const char *passwd, uint32_t security, uint32_t channel);
-extern rt_err_t rw007_wifi_tx(rt_device_t dev, uint8_t *pbuffer, rt_size_t len);
+extern rt_err_t rw007_sn_get(char sn[24]);
+extern rt_err_t rw007_version_get(char version[16]);
+
+extern rt_err_t rt_hw_wifi_init(const char *spi_device_name);
 
 #endif // SPI_WIFI_H_INCLUDED

@@ -1,13 +1,3 @@
-/*
- * Copyright (c) 2006-2018, RT-Thread Development Team
- *
- * SPDX-License-Identifier: Apache-2.0
- *
- * Change Logs:
- * Date           Author       Notes
- * 2019-02-20     zyh          first version
- */
-
 #include <rtthread.h>
 
 #ifdef RW007_USING_STM32_DRIVERS
@@ -15,7 +5,7 @@
 #include <drv_spi.h>
 #include <board.h>
 #include <spi_wifi_rw007.h>
-#include <wlan_port.h>
+
 #define RW007_AT_MODE   3
 #define RW007_SPI_MODE  1
 
@@ -47,7 +37,7 @@ int wifi_spi_device_init(void)
 {
     set_rw007_mode(RW007_SPI_MODE);
     stm32_spi_bus_attach_device(RW007_CS_PIN, RW007_SPI_BUS_NAME, "wspi");
-    rt_hw_wlan_init();
+    rt_hw_wifi_init("wspi");
     rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);
 }
 INIT_APP_EXPORT(wifi_spi_device_init);
@@ -55,7 +45,10 @@ INIT_APP_EXPORT(wifi_spi_device_init);
 static void int_wifi_irq(void * p)
 {
     ((void)p);
-    spi_wifi_isr(0);
+    if(rt_pin_read(RW007_INT_BUSY_PIN))
+    {
+        spi_wifi_isr(0);
+    }
 }
 
 void spi_wifi_hw_init(void)
