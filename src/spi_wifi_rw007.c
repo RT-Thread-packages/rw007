@@ -353,6 +353,7 @@ static rt_err_t wlan_join(struct rt_wlan_device *wlan, struct rt_sta_info *sta_i
     value.info.ssid = sta_info->ssid;
     rt_memcpy(value.info.bssid, sta_info->bssid, 6);
     strncpy(value.passwd, (const char *)&sta_info->key.val[0], sta_info->key.len);
+    value.passwd[sta_info->key.len] = '\0';
     return spi_set_data(wlan, RW00x_CMD_JOIN, &value, sizeof(value));
 }
 
@@ -367,6 +368,7 @@ static rt_err_t wlan_softap(struct rt_wlan_device *wlan, struct rt_ap_info *ap_i
     value.info.rssi = 0;
     value.info.ssid = ap_info->ssid;
     strncpy(value.passwd, (const char *)&ap_info->key.val[0], ap_info->key.len);
+    value.passwd[ap_info->key.len] = '\0';
     return spi_set_data(wlan, RW00x_CMD_SOFTAP, &value, sizeof(value));
 }
 
