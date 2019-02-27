@@ -12,8 +12,7 @@
  * 2019-02-25     zyh          porting rw007 to wlan 
  */
 #include <rtthread.h>
-#include <rtdevice.h>
-
+#include <string.h>
 
 #ifndef RW007_LOG_LEVEL
 #define RW007_LOG_LEVEL DBG_LOG

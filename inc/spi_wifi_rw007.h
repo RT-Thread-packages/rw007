@@ -14,9 +14,7 @@
 
 #include <stdint.h>
 #include "lwipopts.h"
-#include <lwip/icmp.h>
-#include <netif/etharp.h>
-#include <netif/ethernetif.h>
+#include <rtdevice.h>
 
 // little-endian
 struct spi_cmd_request

@@ -55,6 +55,17 @@ int wifi_spi_device_init(void)
 }
 INIT_APP_EXPORT(wifi_spi_device_init);
 
+static int rw007_update(void)
+{
+    rt_device_t device = rt_device_find(RW007_SPI_BUS_NAME);
+    struct stm32_spi *hspi = (struct stm32_spi *)device->user_data;
+    __HAL_SPI_DISABLE((SPI_HandleTypeDef *)hspi);
+    HAL_SPI_MspDeInit((SPI_HandleTypeDef *)hspi);
+    set_rw007_mode(RW007_AT_MODE);
+    return 0;
+}
+MSH_CMD_EXPORT(rw007_update, rw007_update);
+
 static void int_wifi_irq(void * p)
 {
     ((void)p);
