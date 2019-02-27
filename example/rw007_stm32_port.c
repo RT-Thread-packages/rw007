@@ -9,6 +9,8 @@
 #define RW007_AT_MODE   3
 #define RW007_SPI_MODE  1
 
+#define RW007_WORKING_STATION_MODE
+
 extern void spi_wifi_isr(int vector);
 
 static void set_rw007_mode(int mode)
@@ -35,20 +37,39 @@ static void set_rw007_mode(int mode)
 
 int wifi_spi_device_init(void)
 {
+    char sn_version[32];
     set_rw007_mode(RW007_SPI_MODE);
     stm32_spi_bus_attach_device(RW007_CS_PIN, RW007_SPI_BUS_NAME, "wspi");
     rt_hw_wifi_init("wspi");
+#ifdef RW007_WORKING_STATION_MODE
     rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);
+#else
+    rt_wlan_set_mode(RT_WLAN_DEVICE_AP_NAME, RT_WLAN_AP);
+#endif
+    
+    rw007_sn_get(sn_version);
+    rt_kprintf("\nrw007  sn: [%s]\n", sn_version);
+    rw007_version_get(sn_version);
+    rt_kprintf("rw007 ver: [%s]\n\n", sn_version);
+    return 0;
 }
 INIT_APP_EXPORT(wifi_spi_device_init);
-    
+
+static int rw007_update(void)
+{
+    rt_device_t device = rt_device_find(RW007_SPI_BUS_NAME);
+    struct stm32_spi *hspi = (struct stm32_spi *)device->user_data;
+    __HAL_SPI_DISABLE((SPI_HandleTypeDef *)hspi);
+    HAL_SPI_MspDeInit((SPI_HandleTypeDef *)hspi);
+    set_rw007_mode(RW007_AT_MODE);
+    return 0;
+}
+MSH_CMD_EXPORT(rw007_update, rw007_update);
+
 static void int_wifi_irq(void * p)
 {
     ((void)p);
-    if(rt_pin_read(RW007_INT_BUSY_PIN))
-    {
-        spi_wifi_isr(0);
-    }
+    spi_wifi_isr(0);
 }
 
 void spi_wifi_hw_init(void)
