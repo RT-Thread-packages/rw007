@@ -34,7 +34,6 @@ static struct rt_event spi_wifi_data_event;
 
 static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
 {
-    struct pbuf *p = RT_NULL;
     struct spi_cmd_request cmd;
     struct spi_response resp;
 
@@ -152,6 +151,10 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
             {
                 rt_wlan_dev_report_data(wifi_ap.wlan, (void *)data_packet->buffer, data_packet->data_len);
             }
+            else if (data_packet->data_type == data_type_promisc_data)
+            {
+                rt_wlan_dev_promisc_handler(wifi_sta.wlan, (void *)data_packet->buffer, data_packet->data_len);
+            }
             else if(data_packet->data_type == data_type_cb)
             {
                 struct rw00x_resp * resp = (struct rw00x_resp *)data_packet->buffer;
@@ -167,7 +170,15 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
                 }
                 else
                 {
-                    rt_wlan_dev_indicate_event_handle(wifi_sta.wlan, resp->cmd, RT_NULL);
+                    if(resp->cmd == RT_WLAN_DEV_EVT_AP_START || resp->cmd == RT_WLAN_DEV_EVT_AP_STOP || 
+                       resp->cmd == RT_WLAN_DEV_EVT_AP_ASSOCIATED || resp->cmd == RT_WLAN_DEV_EVT_AP_DISASSOCIATED)
+                    {
+                        rt_wlan_dev_indicate_event_handle(wifi_ap.wlan, (rt_wlan_dev_event_t)resp->cmd, RT_NULL);
+                    }
+                    else
+                    {
+                        rt_wlan_dev_indicate_event_handle(wifi_sta.wlan, (rt_wlan_dev_event_t)resp->cmd, RT_NULL);
+                    }
                 }
             }
             else if (data_packet->data_type == data_type_resp)
@@ -233,9 +244,9 @@ rt_inline struct rw007_wifi *wifi_get_dev_by_wlan(struct rt_wlan_device *wlan)
     {
         return &wifi_sta;
     }
-    if (wlan == RT_NULL)
+    if (wlan == wifi_ap.wlan)
     {
-        return RT_NULL;
+        return &wifi_ap;
     }
     return RT_NULL;
 }
@@ -328,7 +339,13 @@ rt_err_t rw007_version_get(char version[16])
 
 static rt_err_t wlan_init(struct rt_wlan_device *wlan)
 {
-    return spi_set_data(wlan, RW00x_CMD_INIT, RT_NULL, 0); 
+    static int inited = 0;
+    if(!inited)
+    {
+        inited = 1;
+        return spi_set_data(wlan, RW00x_CMD_INIT, RT_NULL, 0);
+    }
+    return RT_EOK;
 }
 
 static rt_err_t wlan_mode(struct rt_wlan_device *wlan, rt_wlan_mode_t mode)
@@ -451,13 +468,21 @@ static rt_country_code_t wlan_get_country(struct rt_wlan_device *wlan)
 
 static rt_err_t wlan_set_mac(struct rt_wlan_device *wlan, rt_uint8_t mac[])
 {
-    return spi_set_data(wlan, RW00x_CMD_MAC_SET, mac, 6);
+    if(wlan == wifi_sta.wlan)
+    {
+        return spi_set_data(wlan, RW00x_CMD_MAC_SET, mac, 6);
+    }
+    return spi_set_data(wlan, RW00x_CMD_AP_MAC_SET, mac, 6);
 }
 
 static rt_err_t wlan_get_mac(struct rt_wlan_device *wlan, rt_uint8_t mac[])
 {
     rt_uint32_t size_of_data;
-    return spi_get_data(wlan, RW00x_CMD_MAC_GET, mac, &size_of_data);
+    if(wlan == wifi_sta.wlan)
+    {
+        return spi_get_data(wlan, RW00x_CMD_MAC_GET, mac, &size_of_data);
+    }
+    return spi_get_data(wlan, RW00x_CMD_AP_MAC_GET, mac, &size_of_data);
 }
 
 static int wlan_send(struct rt_wlan_device *wlan, void *buff, int len)

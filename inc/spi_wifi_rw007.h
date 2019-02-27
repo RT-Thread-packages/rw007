@@ -53,8 +53,8 @@ struct spi_response
 typedef enum
 {
     data_type_sta_eth_data = 0,
-    data_type_ap_eth_data = 0,
-    data_type_promisc_data = 0,
+    data_type_ap_eth_data,
+    data_type_promisc_data,
     data_type_cmd,
     data_type_resp,
     data_type_cb,
@@ -152,6 +152,8 @@ typedef enum
     RW00x_CMD_GET_CHANNEL,
     RW00x_CMD_SET_COUNTRY,
     RW00x_CMD_GET_COUNTRY,
+    RW00x_CMD_AP_MAC_GET,
+    RW00x_CMD_AP_MAC_SET,
     RW00x_CMD_MAX_NUM
 }RW00x_CMD;
 
