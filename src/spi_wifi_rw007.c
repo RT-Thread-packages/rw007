@@ -39,7 +39,7 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
     rt_err_t result;
     const struct spi_data_packet *data_packet = RT_NULL;
     struct rt_spi_device *rt_spi_device = dev->spi_device;
-
+    uint8_t * rx_buffer = rt_mp_alloc(&dev->spi_rx_mp, RT_WAITING_NO);
     /* Disable INT Pin interrupt */
     spi_wifi_int_cmd(0);
 
@@ -49,15 +49,19 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
     }
 
     /* Clear cmd */
-    memset(&cmd, 0, sizeof(struct spi_cmd_request));
+    cmd.flag = 0;
+    cmd.M2S_len = 0;
 
     /* Set magic word */
     cmd.magic1 = CMD_MAGIC1;
     cmd.magic2 = CMD_MAGIC2;
 
     /* Set master ready flag bit */
-    cmd.flag |= CMD_FLAG_MRDY;
-
+    if(rx_buffer)
+    {
+        cmd.flag |= CMD_FLAG_MRDY;
+    }
+    
     /* Try get data to send to rw007 */
     result = rt_mb_recv(&dev->spi_tx_mb,
                         (rt_ubase_t *)&data_packet,
@@ -96,6 +100,7 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
         /* Check response's magic word */
         if ((resp.magic1 != RESP_MAGIC1) || (resp.magic2 != RESP_MAGIC2))
         {
+            resp.S2M_len = 0;
             goto _bad_resp_magic;
         }
 
@@ -119,8 +124,13 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
 
     _bad_resp_magic:
         /* Setup message */
+        if(!resp.S2M_len && rx_buffer)
+        {
+            rt_mp_free(rx_buffer);
+            rx_buffer = RT_NULL;
+        }
         message.send_buf = data_packet;
-        message.recv_buf = dev->spi_hw_rx_buffer;
+        message.recv_buf = rx_buffer;
         message.length = RT_ALIGN(max_data_len, 4);/* align clk to word */
         message.cs_take = 0;
         message.cs_release = 1;
@@ -132,16 +142,37 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
         rt_spi_release_bus(rt_spi_device);
 
         /* Free send data space */
-        if (cmd.M2S_len)
+        if (data_packet)
         {
             rt_mp_free((void *)data_packet);
             data_packet = RT_NULL;
         }
 
         /* Parse recevied data */
-        if ((resp.S2M_len) && (resp.S2M_len <= MAX_SPI_PACKET_SIZE))
+        if(rx_buffer)
         {
-            data_packet = (struct spi_data_packet *)dev->spi_hw_rx_buffer;
+            rt_mb_send(&dev->spi_rx_mb, (rt_ubase_t)rx_buffer);
+        }
+    }
+    /* Enable INT Pin interrupt */
+    spi_wifi_int_cmd(1);
+
+    if ((cmd.M2S_len == 0) && (resp.S2M_len == 0))
+    {
+        return -RT_ERROR;
+    }
+
+    return RT_EOK;
+}
+
+static void wifi_data_process_thread_entry(void *parameter)
+{
+    const struct spi_data_packet *data_packet = RT_NULL;
+    struct rw007_spi *dev = (struct rw007_spi *)parameter;
+    while(1)
+    {
+        if(rt_mb_recv(&dev->spi_rx_mb, (rt_ubase_t *)&data_packet, RT_WAITING_FOREVER) == RT_EOK)
+        {
             if (data_packet->data_type == data_type_sta_eth_data)
             {
                 rt_wlan_dev_report_data(wifi_sta.wlan, (void *)data_packet->buffer, data_packet->data_len);
@@ -198,18 +229,12 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
                     }
                 }
             }
+            
+            rt_mp_free((void *)data_packet);
         }
     }
-    /* Enable INT Pin interrupt */
-    spi_wifi_int_cmd(1);
-
-    if ((cmd.M2S_len == 0) && (resp.S2M_len == 0))
-    {
-        return -RT_ERROR;
-    }
-
-    return RT_EOK;
 }
+
 
 static void spi_wifi_data_thread_entry(void *parameter)
 {
@@ -585,6 +610,19 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name)
                &rw007_spi.spi_tx_mb_pool[0],
                SPI_TX_POOL_SIZE,
                RT_IPC_FLAG_PRIO);
+               
+    rt_mp_init(&rw007_spi.spi_rx_mp,
+               "spi_rx",
+               &rw007_spi.spi_rx_mempool[0],
+               sizeof(rw007_spi.spi_rx_mempool),
+               sizeof(struct spi_data_packet));
+
+    rt_mb_init(&rw007_spi.spi_rx_mb,
+               "spi_rx",
+               &rw007_spi.spi_rx_mb_pool[0],
+               SPI_TX_POOL_SIZE,
+               RT_IPC_FLAG_PRIO);
+
     rt_event_init(&spi_wifi_data_event, "wifi", RT_IPC_FLAG_FIFO);
 
     rw007_spi.rw007_cmd_event = rt_event_create("wifi_cmd", RT_IPC_FLAG_FIFO);
@@ -602,16 +640,29 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name)
 
     {
         rt_thread_t tid;
-
+        tid = rt_thread_create("wifi_p",
+                               wifi_data_process_thread_entry,
+                               &rw007_spi,
+                               2048,
+                               8,
+                               20);
+        if(!tid)
+        {
+            return -RT_ERROR;
+        }
+        rt_thread_startup(tid);
+        
         tid = rt_thread_create("wifi",
                                spi_wifi_data_thread_entry,
                                RT_NULL,
                                2048,
-                               RT_THREAD_PRIORITY_MAX - 2,
+                               9,
                                20);
-
-        if (tid != RT_NULL)
-            rt_thread_startup(tid);
+        if(!tid)
+        {
+            return -RT_ERROR;
+        }
+        rt_thread_startup(tid);
     }
     rt_event_send(&spi_wifi_data_event, 1);
     return RT_EOK;

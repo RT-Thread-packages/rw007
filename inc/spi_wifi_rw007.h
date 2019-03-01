@@ -45,8 +45,8 @@ struct spi_response
 
 /* spi slave configure. */
 #define SPI_MAX_DATA_LEN 1520
-#define SPI_TX_POOL_SIZE 2
-#define SPI_RX_POOL_SIZE 2
+#define SPI_TX_POOL_SIZE 4
+#define SPI_RX_POOL_SIZE 4
 
 typedef enum
 {
@@ -162,16 +162,24 @@ struct rw007_spi
     struct rt_mempool spi_tx_mp;
 
     struct rt_mailbox spi_tx_mb;
+    
+    struct rt_mempool spi_rx_mp;
+
+    struct rt_mailbox spi_rx_mb;
 
     int spi_tx_mb_pool[SPI_TX_POOL_SIZE + 1];
+    
+    int spi_rx_mb_pool[SPI_RX_POOL_SIZE + 1];
 
     rt_event_t rw007_cmd_event;
 
     ALIGN(4)
     rt_uint8_t spi_tx_mempool[(sizeof(struct spi_data_packet) + 4) * SPI_TX_POOL_SIZE];
-
+    
     ALIGN(4)
-    uint8_t spi_hw_rx_buffer[MAX_SPI_BUFFER_SIZE];
+    rt_uint8_t spi_rx_mempool[(sizeof(struct spi_data_packet) + 4) * SPI_RX_POOL_SIZE];
+    
+    
     struct rw00x_resp * resp[RW00x_CMD_MAX_NUM];
 };
 
