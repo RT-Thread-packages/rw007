@@ -24,7 +24,6 @@
 #define DBG_COLOR
 #include <rtdbg.h>
 
-
 #include "spi_wifi_rw007.h"
 
 static struct rw007_spi rw007_spi;
@@ -121,8 +120,7 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
             if (resp.S2M_len > max_data_len)
                 max_data_len = resp.S2M_len;
         }
-
-    _bad_resp_magic:
+_bad_resp_magic:
         /* Setup message */
         if(!resp.S2M_len && rx_buffer)
         {
@@ -174,25 +172,25 @@ static void wifi_data_process_thread_entry(void *parameter)
         /* get the mempool memory for recv data package */
         if(rt_mb_recv(&dev->spi_rx_mb, (rt_ubase_t *)&data_packet, RT_WAITING_FOREVER) == RT_EOK)
         {
-            if (data_packet->data_type == data_type_sta_eth_data)
+            if (data_packet->data_type == DATA_TYPE_STA_ETH_DATA)
             {
                 /* Ethernet package from station device */
                 rt_wlan_dev_report_data(wifi_sta.wlan, (void *)data_packet->buffer, data_packet->data_len);
             }
-            else if (data_packet->data_type == data_type_ap_eth_data)
+            else if (data_packet->data_type == DATA_TYPE_AP_ETH_DATA)
             {
                 /* Ethernet package from ap device */
                 rt_wlan_dev_report_data(wifi_ap.wlan, (void *)data_packet->buffer, data_packet->data_len);
             }
-            else if (data_packet->data_type == data_type_promisc_data)
+            else if (data_packet->data_type == DATA_TYPE_PROMISC_ETH_DATA)
             {
                 /* air wifi package from promisc */
                 rt_wlan_dev_promisc_handler(wifi_sta.wlan, (void *)data_packet->buffer, data_packet->data_len);
             }
             /* event callback */
-            else if(data_packet->data_type == data_type_cb)
+            else if(data_packet->data_type == DATA_TYPE_CB)
             {
-                struct rw00x_resp * resp = (struct rw00x_resp *)data_packet->buffer;
+                struct rw007_resp * resp = (struct rw007_resp *)data_packet->buffer;
                 if(resp->cmd == RT_WLAN_DEV_EVT_SCAN_REPORT)
                 {
                     /* parse scan report event data */
@@ -220,7 +218,7 @@ static void wifi_data_process_thread_entry(void *parameter)
                     }
                 }
             }
-            else if (data_packet->data_type == data_type_resp)
+            else if (data_packet->data_type == DATA_TYPE_RESP)
             {
                 /* parse cmd's response */
                 struct rw00x_resp * resp = (struct rw00x_resp *)data_packet->buffer;
@@ -247,7 +245,6 @@ static void wifi_data_process_thread_entry(void *parameter)
         }
     }
 }
-
 
 static void spi_wifi_data_thread_entry(void *parameter)
 {
@@ -293,12 +290,12 @@ rt_inline struct rw007_wifi *wifi_get_dev_by_wlan(struct rt_wlan_device *wlan)
 rt_inline void spi_send_cmd(struct rw007_spi * hspi, RW00x_CMD COMMAND, void * buffer, rt_uint32_t len)
 {
     struct spi_data_packet * data_packet;
-    struct rw00x_cmd * cmd;
+    struct rw007_cmd * cmd;
 
     data_packet = rt_mp_alloc(&hspi->spi_tx_mp, RT_WAITING_FOREVER);
-    data_packet->data_type = data_type_cmd;
+    data_packet->data_type = DATA_TYPE_CMD;
 
-    cmd = (struct rw00x_cmd *)data_packet->buffer;
+    cmd = (struct rw007_cmd *)data_packet->buffer;
     cmd->cmd = COMMAND;
     cmd->len = len;
     if(cmd->len)
@@ -306,7 +303,7 @@ rt_inline void spi_send_cmd(struct rw007_spi * hspi, RW00x_CMD COMMAND, void * b
         rt_memcpy(&cmd->value, buffer, cmd->len);
     }
 
-    data_packet->data_len = member_offset(struct rw00x_cmd, value) + cmd->len;
+    data_packet->data_len = member_offset(struct rw007_cmd, value) + cmd->len;
 
     rt_mb_send(&hspi->spi_tx_mb, (rt_uint32_t)data_packet);
     rt_event_send(&spi_wifi_data_event, 1);
@@ -399,7 +396,7 @@ static rt_err_t wlan_scan(struct rt_wlan_device *wlan, struct rt_scan_info *scan
 
 static rt_err_t wlan_join(struct rt_wlan_device *wlan, struct rt_sta_info *sta_info)
 {
-    struct rw00x_ap_info_value value;
+    struct rw007_ap_info_value value;
     value.info.security = sta_info->security;
     value.info.band = RT_802_11_BAND_2_4GHZ;
     value.info.datarate = 0;
@@ -415,7 +412,7 @@ static rt_err_t wlan_join(struct rt_wlan_device *wlan, struct rt_sta_info *sta_i
 
 static rt_err_t wlan_softap(struct rt_wlan_device *wlan, struct rt_ap_info *ap_info)
 {
-    struct rw00x_ap_info_value value;
+    struct rw007_ap_info_value value;
     value.info.security = ap_info->security;
     value.info.band = RT_802_11_BAND_2_4GHZ;
     value.info.datarate = 0;
@@ -538,13 +535,12 @@ static int wlan_send(struct rt_wlan_device *wlan, void *buff, int len)
 
     if (wlan == wifi_sta.wlan)
     {
-        data_packet->data_type = data_type_sta_eth_data;
+        data_packet->data_type = DATA_TYPE_STA_ETH_DATA;
     }
     else
     {
-        data_packet->data_type = data_type_ap_eth_data;
+        data_packet->data_type = DATA_TYPE_AP_ETH_DATA;
     }
-
     data_packet->data_len = len;
 
     rt_memcpy(data_packet->buffer, buff, len);
@@ -553,8 +549,6 @@ static int wlan_send(struct rt_wlan_device *wlan, void *buff, int len)
     rt_event_send(&spi_wifi_data_event, 1);
     return len;
 }
-
-
 
 const static struct rt_wlan_dev_ops ops =
 {
@@ -665,7 +659,7 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name)
         rt_thread_t tid;
 
         /* Create package parse thread */
-        tid = rt_thread_create("wifi_p",
+        tid = rt_thread_create("wifi_handle",
                                wifi_data_process_thread_entry,
                                &rw007_spi,
                                2048,
@@ -678,7 +672,7 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name)
         rt_thread_startup(tid);
 
         /* Create wifi transfer thread */
-        tid = rt_thread_create("wifi",
+        tid = rt_thread_create("wifi_xfer",
                                spi_wifi_data_thread_entry,
                                RT_NULL,
                                2048,
@@ -706,5 +700,3 @@ void spi_wifi_isr(int vector)
     /* leave interrupt */
     rt_interrupt_leave();
 }
-
-

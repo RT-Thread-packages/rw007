@@ -13,14 +13,13 @@
 #define SPI_WIFI_H_INCLUDED
 
 #include <stdint.h>
-#include "lwipopts.h"
 #include <rtdevice.h>
 
-// little-endian
+/* little-endian */
 struct spi_cmd_request
 {
     uint32_t flag;
-    uint32_t M2S_len; // master to slave data len.
+    uint32_t M2S_len; /* master to slave data len. */
     uint32_t magic1;
     uint32_t magic2;
 };
@@ -30,90 +29,77 @@ struct spi_cmd_request
 
 #define CMD_FLAG_MRDY (0x01)
 
-// little-endian
+/* little-endian */
 struct spi_response
 {
     uint32_t flag;
-    uint32_t S2M_len; // slave to master data len.
+    uint32_t S2M_len; /* slave to master data len. */
     uint32_t magic1;
     uint32_t magic2;
 };
 
-#define RESP_FLAG_SRDY (0x01)
 #define RESP_MAGIC1 (0x98BADCFE)
 #define RESP_MAGIC2 (0x10325476)
 
-/* spi slave configure. */
+#define RESP_FLAG_SRDY (0x01)
+
+/* spi buffer configure. */
 #define SPI_MAX_DATA_LEN 1520
 #define SPI_TX_POOL_SIZE 4
 #define SPI_RX_POOL_SIZE 4
 
 typedef enum
 {
-    data_type_sta_eth_data = 0,
-    data_type_ap_eth_data,
-    data_type_promisc_data,
-    data_type_cmd,
-    data_type_resp,
-    data_type_cb,
-}
-app_data_type_typedef;
+    DATA_TYPE_STA_ETH_DATA = 0,
+    DATA_TYPE_AP_ETH_DATA,
+    DATA_TYPE_PROMISC_ETH_DATA,
+    DATA_TYPE_CMD,
+    DATA_TYPE_RESP,
+    DATA_TYPE_CB,
+} app_data_type_t;
 
 struct spi_data_packet
 {
-    uint32_t data_len;
-    uint32_t data_type;
+    uint32_t data_len;  /* length for buffer */
+    uint32_t data_type; /* app_data_type_t */
     char buffer[SPI_MAX_DATA_LEN];
 };
 
-/********************************* RW007 **************************************/
-
-/* option */
-#define RW007_CMD_TIMEOUT (RT_TICK_PER_SECOND * 3)
-#define SSID_NAME_LENGTH_MAX (32)
-#define PASSWORD_LENGTH_MAX (64)
-
-typedef enum
-{
-    MODE_STATION = 0,
-    MODE_SOFTAP = 1,
-} wifi_mode_t;
-
-typedef struct rw00x_ap_info_value
+typedef struct rw007_ap_info_value
 {
     struct rt_wlan_info info;
     char passwd[PASSWORD_LENGTH_MAX];
-} * rw00x_ap_info_value_t;
+} * rw007_ap_info_value_t;
 
 /* littel endian */
-typedef struct rw00x_cmd
+typedef struct rw007_cmd
 {
     uint32_t cmd;
     uint32_t len;
 
-    /** command body */
+    /* command parameter */
     union
     {
         uint32_t int_value;
-        uint8_t mac_value[8];/* padding 2bytes */
-        struct rw00x_ap_info_value ap_info_value;
+        uint8_t mac_value[8]; /* padding 2bytes */
+        struct rw007_ap_info_value ap_info_value;
         char string_value[UINT16_MAX];
     } value;
-} * rw00x_cmd_t;
+} * rw007_cmd_t;
 
-struct rw00x_resp
+struct rw007_resp
 {
     uint32_t cmd;
     uint32_t len;
 
     int32_t result; /* result of CMD. */
 
-    /** resp Body */
+    /* response value */
     union
     {
         uint32_t int_value;
-        uint8_t mac_value[8];/* padding 2bytes */
-        struct rw00x_ap_info_value ap_info_value;
+        uint8_t mac_value[8]; /* padding 2bytes */
+        struct rw007_ap_info_value ap_info_value;
         char string_value[UINT16_MAX];
     } value;
 };
@@ -122,9 +108,7 @@ struct rw00x_resp
 #define node_entry(node, type, member) ((type *)((char *)(node) - (unsigned long)(&((type *)0)->member)))
 #define member_offset(type, member) ((unsigned long)(&((type *)0)->member))
 
-#define MAX_ADDR_LEN (6) 
 #define MAX_SPI_PACKET_SIZE (member_offset(struct spi_data_packet, buffer) + SPI_MAX_DATA_LEN)
-#define MAX_SPI_BUFFER_SIZE (sizeof(struct spi_response) + MAX_SPI_PACKET_SIZE)
 
 typedef enum 
 {
@@ -157,51 +141,50 @@ typedef enum
 
 struct rw007_spi
 {
+    /* Device handle for spi device */
     struct rt_spi_device *spi_device;
 
+    /* Tx mempool and mailbox */
     struct rt_mempool spi_tx_mp;
-
-    struct rt_mailbox spi_tx_mb;
-    
-    struct rt_mempool spi_rx_mp;
-
-    struct rt_mailbox spi_rx_mb;
-
-    int spi_tx_mb_pool[SPI_TX_POOL_SIZE + 1];
-    
-    int spi_rx_mb_pool[SPI_RX_POOL_SIZE + 1];
-
-    rt_event_t rw007_cmd_event;
-
     ALIGN(4)
     rt_uint8_t spi_tx_mempool[(sizeof(struct spi_data_packet) + 4) * SPI_TX_POOL_SIZE];
+    struct rt_mailbox spi_tx_mb;
+    int spi_tx_mb_pool[SPI_TX_POOL_SIZE + 1];
     
+    /* Rx mempool and mailbox */
+    struct rt_mempool spi_rx_mp;
     ALIGN(4)
     rt_uint8_t spi_rx_mempool[(sizeof(struct spi_data_packet) + 4) * SPI_RX_POOL_SIZE];
-    
-    
-    struct rw00x_resp * resp[RW00x_CMD_MAX_NUM];
+    struct rt_mailbox spi_rx_mb;
+    int spi_rx_mb_pool[SPI_RX_POOL_SIZE + 1];
+
+    /* response event */
+    rt_event_t rw007_cmd_event;
+    /* response data */
+    struct rw007_resp * resp[RW00x_CMD_MAX_NUM];
 };
+
+#define RW00x_CMD_RESP_EVENT(n)     (0x01UL << n)
 
 struct rw007_wifi
 {
     /* inherit from ethernet device */
     struct rt_wlan_device *wlan;
-
+    /* spi transfer layer handle */
     struct rw007_spi * hspi;
 };
-
-
-#define RW00x_CMD_RESP_EVENT(n)     (0x01UL << n)
 
 /* porting */
 extern void spi_wifi_hw_init(void);
 extern void spi_wifi_int_cmd(rt_bool_t cmd);
 extern rt_bool_t spi_wifi_is_busy(void);
+/* end porting */
 
+/* api exclude in wlan framework */
 extern rt_err_t rw007_sn_get(char sn[24]);
 extern rt_err_t rw007_version_get(char version[16]);
+/* end api exclude in wlan framework */
 
 extern rt_err_t rt_hw_wifi_init(const char *spi_device_name);
 
-#endif // SPI_WIFI_H_INCLUDED
+#endif /* SPI_WIFI_H_INCLUDED */
