@@ -24,7 +24,6 @@
 #define DBG_COLOR
 #include <rtdbg.h>
 
-
 #include "spi_wifi_rw007.h"
 
 static struct rw007_spi rw007_spi;
@@ -39,7 +38,7 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
     rt_err_t result;
     const struct spi_data_packet *data_packet = RT_NULL;
     struct rt_spi_device *rt_spi_device = dev->spi_device;
-
+    uint8_t * rx_buffer = rt_mp_alloc(&dev->spi_rx_mp, RT_WAITING_NO);
     /* Disable INT Pin interrupt */
     spi_wifi_int_cmd(0);
 
@@ -49,15 +48,19 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
     }
 
     /* Clear cmd */
-    memset(&cmd, 0, sizeof(struct spi_cmd_request));
+    cmd.flag = 0;
+    cmd.M2S_len = 0;
 
     /* Set magic word */
     cmd.magic1 = CMD_MAGIC1;
     cmd.magic2 = CMD_MAGIC2;
 
     /* Set master ready flag bit */
-    cmd.flag |= CMD_FLAG_MRDY;
-
+    if(rx_buffer)
+    {
+        cmd.flag |= CMD_FLAG_MRDY;
+    }
+    
     /* Try get data to send to rw007 */
     result = rt_mb_recv(&dev->spi_tx_mb,
                         (rt_ubase_t *)&data_packet,
@@ -96,6 +99,7 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
         /* Check response's magic word */
         if ((resp.magic1 != RESP_MAGIC1) || (resp.magic2 != RESP_MAGIC2))
         {
+            resp.S2M_len = 0;
             goto _bad_resp_magic;
         }
 
@@ -116,11 +120,15 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
             if (resp.S2M_len > max_data_len)
                 max_data_len = resp.S2M_len;
         }
-
-    _bad_resp_magic:
+_bad_resp_magic:
         /* Setup message */
+        if(!resp.S2M_len && rx_buffer)
+        {
+            rt_mp_free(rx_buffer);
+            rx_buffer = RT_NULL;
+        }
         message.send_buf = data_packet;
-        message.recv_buf = dev->spi_hw_rx_buffer;
+        message.recv_buf = rx_buffer;
         message.length = RT_ALIGN(max_data_len, 4);/* align clk to word */
         message.cs_take = 0;
         message.cs_release = 1;
@@ -132,72 +140,16 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
         rt_spi_release_bus(rt_spi_device);
 
         /* Free send data space */
-        if (cmd.M2S_len)
+        if (data_packet)
         {
             rt_mp_free((void *)data_packet);
             data_packet = RT_NULL;
         }
 
         /* Parse recevied data */
-        if ((resp.S2M_len) && (resp.S2M_len <= MAX_SPI_PACKET_SIZE))
+        if(rx_buffer)
         {
-            data_packet = (struct spi_data_packet *)dev->spi_hw_rx_buffer;
-            if (data_packet->data_type == data_type_sta_eth_data)
-            {
-                rt_wlan_dev_report_data(wifi_sta.wlan, (void *)data_packet->buffer, data_packet->data_len);
-            }
-            else if (data_packet->data_type == data_type_ap_eth_data)
-            {
-                rt_wlan_dev_report_data(wifi_ap.wlan, (void *)data_packet->buffer, data_packet->data_len);
-            }
-            else if (data_packet->data_type == data_type_promisc_data)
-            {
-                rt_wlan_dev_promisc_handler(wifi_sta.wlan, (void *)data_packet->buffer, data_packet->data_len);
-            }
-            else if(data_packet->data_type == data_type_cb)
-            {
-                struct rw00x_resp * resp = (struct rw00x_resp *)data_packet->buffer;
-                if(resp->cmd == RT_WLAN_DEV_EVT_SCAN_REPORT)
-                {
-                    struct rt_wlan_buff buff;
-                    struct rt_wlan_info * wlan_info;
-                    wlan_info = (struct rt_wlan_info *)&resp->value;
-                    buff.data = wlan_info;
-                    buff.len = sizeof(struct rt_wlan_info);
-
-                    rt_wlan_dev_indicate_event_handle(wifi_sta.wlan, RT_WLAN_DEV_EVT_SCAN_REPORT, &buff);
-                }
-                else
-                {
-                    if(resp->cmd == RT_WLAN_DEV_EVT_AP_START || resp->cmd == RT_WLAN_DEV_EVT_AP_STOP || 
-                       resp->cmd == RT_WLAN_DEV_EVT_AP_ASSOCIATED || resp->cmd == RT_WLAN_DEV_EVT_AP_DISASSOCIATED)
-                    {
-                        rt_wlan_dev_indicate_event_handle(wifi_ap.wlan, (rt_wlan_dev_event_t)resp->cmd, RT_NULL);
-                    }
-                    else
-                    {
-                        rt_wlan_dev_indicate_event_handle(wifi_sta.wlan, (rt_wlan_dev_event_t)resp->cmd, RT_NULL);
-                    }
-                }
-            }
-            else if (data_packet->data_type == data_type_resp)
-            {
-                struct rw00x_resp * resp = (struct rw00x_resp *)data_packet->buffer;
-                if(resp->cmd < RW00x_CMD_MAX_NUM)
-                {
-                    if(dev->resp[resp->cmd])
-                    {
-                        rt_free(dev->resp[resp->cmd]);
-                    }
-                    
-                    dev->resp[resp->cmd] = rt_malloc(MAX_SPI_PACKET_SIZE);
-                    if(dev->resp[resp->cmd])
-                    {
-                        rt_memcpy(dev->resp[resp->cmd], resp, MAX_SPI_PACKET_SIZE);
-                        rt_event_send(dev->rw007_cmd_event, RW00x_CMD_RESP_EVENT(resp->cmd));
-                    }
-                }
-            }
+            rt_mb_send(&dev->spi_rx_mb, (rt_ubase_t)rx_buffer);
         }
     }
     /* Enable INT Pin interrupt */
@@ -209,6 +161,89 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
     }
 
     return RT_EOK;
+}
+
+static void wifi_data_process_thread_entry(void *parameter)
+{
+    const struct spi_data_packet *data_packet = RT_NULL;
+    struct rw007_spi *dev = (struct rw007_spi *)parameter;
+    while(1)
+    {
+        /* get the mempool memory for recv data package */
+        if(rt_mb_recv(&dev->spi_rx_mb, (rt_ubase_t *)&data_packet, RT_WAITING_FOREVER) == RT_EOK)
+        {
+            if (data_packet->data_type == DATA_TYPE_STA_ETH_DATA)
+            {
+                /* Ethernet package from station device */
+                rt_wlan_dev_report_data(wifi_sta.wlan, (void *)data_packet->buffer, data_packet->data_len);
+            }
+            else if (data_packet->data_type == DATA_TYPE_AP_ETH_DATA)
+            {
+                /* Ethernet package from ap device */
+                rt_wlan_dev_report_data(wifi_ap.wlan, (void *)data_packet->buffer, data_packet->data_len);
+            }
+            else if (data_packet->data_type == DATA_TYPE_PROMISC_ETH_DATA)
+            {
+                /* air wifi package from promisc */
+                rt_wlan_dev_promisc_handler(wifi_sta.wlan, (void *)data_packet->buffer, data_packet->data_len);
+            }
+            /* event callback */
+            else if(data_packet->data_type == DATA_TYPE_CB)
+            {
+                struct rw007_resp * resp = (struct rw007_resp *)data_packet->buffer;
+                if(resp->cmd == RT_WLAN_DEV_EVT_SCAN_REPORT)
+                {
+                    /* parse scan report event data */
+                    struct rt_wlan_buff buff;
+                    struct rt_wlan_info * wlan_info;
+                    wlan_info = (struct rt_wlan_info *)&resp->value;
+                    buff.data = wlan_info;
+                    buff.len = sizeof(struct rt_wlan_info);
+
+                    /* indicate scan report event */
+                    rt_wlan_dev_indicate_event_handle(wifi_sta.wlan, RT_WLAN_DEV_EVT_SCAN_REPORT, &buff);
+                }
+                else
+                {
+                    if(resp->cmd == RT_WLAN_DEV_EVT_AP_START || resp->cmd == RT_WLAN_DEV_EVT_AP_STOP || 
+                       resp->cmd == RT_WLAN_DEV_EVT_AP_ASSOCIATED || resp->cmd == RT_WLAN_DEV_EVT_AP_DISASSOCIATED)
+                    {
+                        /* indicate ap device event */
+                        rt_wlan_dev_indicate_event_handle(wifi_ap.wlan, (rt_wlan_dev_event_t)resp->cmd, RT_NULL);
+                    }
+                    else
+                    {
+                        /* indicate sta device event */
+                        rt_wlan_dev_indicate_event_handle(wifi_sta.wlan, (rt_wlan_dev_event_t)resp->cmd, RT_NULL);
+                    }
+                }
+            }
+            else if (data_packet->data_type == DATA_TYPE_RESP)
+            {
+                /* parse cmd's response */
+                struct rw00x_resp * resp = (struct rw00x_resp *)data_packet->buffer;
+                if(resp->cmd < RW00x_CMD_MAX_NUM)
+                {
+                    if(dev->resp[resp->cmd])
+                    {
+                        rt_free(dev->resp[resp->cmd]);
+                    }
+
+                    /* stash response result */
+                    dev->resp[resp->cmd] = rt_malloc(MAX_SPI_PACKET_SIZE);
+                    if(dev->resp[resp->cmd])
+                    {
+                        rt_memcpy(dev->resp[resp->cmd], resp, MAX_SPI_PACKET_SIZE);
+
+                        /* notify response arrived */
+                        rt_event_send(dev->rw007_cmd_event, RW00x_CMD_RESP_EVENT(resp->cmd));
+                    }
+                }
+            }
+            /* free recv mempool memory */
+            rt_mp_free((void *)data_packet);
+        }
+    }
 }
 
 static void spi_wifi_data_thread_entry(void *parameter)
@@ -228,8 +263,10 @@ static void spi_wifi_data_thread_entry(void *parameter)
             continue;
         }
 
+        /* transfer */
         result = spi_wifi_transfer(&rw007_spi);
 
+        /* continue transfer once */
         if (result == RT_EOK)
         {
             rt_event_send(&spi_wifi_data_event, 1);
@@ -253,12 +290,12 @@ rt_inline struct rw007_wifi *wifi_get_dev_by_wlan(struct rt_wlan_device *wlan)
 rt_inline void spi_send_cmd(struct rw007_spi * hspi, RW00x_CMD COMMAND, void * buffer, rt_uint32_t len)
 {
     struct spi_data_packet * data_packet;
-    struct rw00x_cmd * cmd;
+    struct rw007_cmd * cmd;
 
     data_packet = rt_mp_alloc(&hspi->spi_tx_mp, RT_WAITING_FOREVER);
-    data_packet->data_type = data_type_cmd;
+    data_packet->data_type = DATA_TYPE_CMD;
 
-    cmd = (struct rw00x_cmd *)data_packet->buffer;
+    cmd = (struct rw007_cmd *)data_packet->buffer;
     cmd->cmd = COMMAND;
     cmd->len = len;
     if(cmd->len)
@@ -266,7 +303,7 @@ rt_inline void spi_send_cmd(struct rw007_spi * hspi, RW00x_CMD COMMAND, void * b
         rt_memcpy(&cmd->value, buffer, cmd->len);
     }
 
-    data_packet->data_len = member_offset(struct rw00x_cmd, value) + cmd->len;
+    data_packet->data_len = member_offset(struct rw007_cmd, value) + cmd->len;
 
     rt_mb_send(&hspi->spi_tx_mb, (rt_uint32_t)data_packet);
     rt_event_send(&spi_wifi_data_event, 1);
@@ -359,7 +396,7 @@ static rt_err_t wlan_scan(struct rt_wlan_device *wlan, struct rt_scan_info *scan
 
 static rt_err_t wlan_join(struct rt_wlan_device *wlan, struct rt_sta_info *sta_info)
 {
-    struct rw00x_ap_info_value value;
+    struct rw007_ap_info_value value;
     value.info.security = sta_info->security;
     value.info.band = RT_802_11_BAND_2_4GHZ;
     value.info.datarate = 0;
@@ -375,7 +412,7 @@ static rt_err_t wlan_join(struct rt_wlan_device *wlan, struct rt_sta_info *sta_i
 
 static rt_err_t wlan_softap(struct rt_wlan_device *wlan, struct rt_ap_info *ap_info)
 {
-    struct rw00x_ap_info_value value;
+    struct rw007_ap_info_value value;
     value.info.security = ap_info->security;
     value.info.band = RT_802_11_BAND_2_4GHZ;
     value.info.datarate = 0;
@@ -498,13 +535,12 @@ static int wlan_send(struct rt_wlan_device *wlan, void *buff, int len)
 
     if (wlan == wifi_sta.wlan)
     {
-        data_packet->data_type = data_type_sta_eth_data;
+        data_packet->data_type = DATA_TYPE_STA_ETH_DATA;
     }
     else
     {
-        data_packet->data_type = data_type_ap_eth_data;
+        data_packet->data_type = DATA_TYPE_AP_ETH_DATA;
     }
-
     data_packet->data_len = len;
 
     rt_memcpy(data_packet->buffer, buff, len);
@@ -513,8 +549,6 @@ static int wlan_send(struct rt_wlan_device *wlan, void *buff, int len)
     rt_event_send(&spi_wifi_data_event, 1);
     return len;
 }
-
-
 
 const static struct rt_wlan_dev_ops ops =
 {
@@ -574,26 +608,47 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name)
         rt_spi_configure(rw007_spi.spi_device, &cfg);
     }
 
+    /* init spi send mempool */
     rt_mp_init(&rw007_spi.spi_tx_mp,
                "spi_tx",
                &rw007_spi.spi_tx_mempool[0],
                sizeof(rw007_spi.spi_tx_mempool),
                sizeof(struct spi_data_packet));
 
+    /* init spi send mailbox */
     rt_mb_init(&rw007_spi.spi_tx_mb,
                "spi_tx",
                &rw007_spi.spi_tx_mb_pool[0],
                SPI_TX_POOL_SIZE,
                RT_IPC_FLAG_PRIO);
+    
+    /* init spi recv mempool */
+    rt_mp_init(&rw007_spi.spi_rx_mp,
+               "spi_rx",
+               &rw007_spi.spi_rx_mempool[0],
+               sizeof(rw007_spi.spi_rx_mempool),
+               sizeof(struct spi_data_packet));
+
+    /* init spi recv mailbox */
+    rt_mb_init(&rw007_spi.spi_rx_mb,
+               "spi_rx",
+               &rw007_spi.spi_rx_mb_pool[0],
+               SPI_TX_POOL_SIZE,
+               RT_IPC_FLAG_PRIO);
+
+    /* init spi data notify event */
     rt_event_init(&spi_wifi_data_event, "wifi", RT_IPC_FLAG_FIFO);
 
     rw007_spi.rw007_cmd_event = rt_event_create("wifi_cmd", RT_IPC_FLAG_FIFO);
 
+    /* register wlan device for ap */
     ret = rt_wlan_dev_register(&wlan_ap, RT_WLAN_DEVICE_AP_NAME, &ops, 0, &wifi_ap);
     if (ret != RT_EOK)
     {
         return ret;
     }
+
+    /* register wlan device for sta */
     ret = rt_wlan_dev_register(&wlan_sta, RT_WLAN_DEVICE_STA_NAME, &ops, 0, &wifi_sta);
     if (ret != RT_EOK)
     {
@@ -603,16 +658,33 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name)
     {
         rt_thread_t tid;
 
-        tid = rt_thread_create("wifi",
+        /* Create package parse thread */
+        tid = rt_thread_create("wifi_handle",
+                               wifi_data_process_thread_entry,
+                               &rw007_spi,
+                               2048,
+                               8,
+                               20);
+        if(!tid)
+        {
+            return -RT_ERROR;
+        }
+        rt_thread_startup(tid);
+
+        /* Create wifi transfer thread */
+        tid = rt_thread_create("wifi_xfer",
                                spi_wifi_data_thread_entry,
                                RT_NULL,
                                2048,
-                               RT_THREAD_PRIORITY_MAX - 2,
+                               9,
                                20);
-
-        if (tid != RT_NULL)
-            rt_thread_startup(tid);
+        if(!tid)
+        {
+            return -RT_ERROR;
+        }
+        rt_thread_startup(tid);
     }
+    /* Start first transfer */
     rt_event_send(&spi_wifi_data_event, 1);
     return RT_EOK;
 }
@@ -622,10 +694,9 @@ void spi_wifi_isr(int vector)
     /* enter interrupt */
     rt_interrupt_enter();
 
+    /* device has a package to ready transfer */
     rt_event_send(&spi_wifi_data_event, 1);
 
     /* leave interrupt */
     rt_interrupt_leave();
 }
-
-
