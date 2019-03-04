@@ -221,7 +221,7 @@ static void wifi_data_process_thread_entry(void *parameter)
             else if (data_packet->data_type == DATA_TYPE_RESP)
             {
                 /* parse cmd's response */
-                struct rw00x_resp * resp = (struct rw00x_resp *)data_packet->buffer;
+                struct rw007_resp * resp = (struct rw007_resp *)data_packet->buffer;
                 if(resp->cmd < RW00x_CMD_MAX_NUM)
                 {
                     if(dev->resp[resp->cmd])
