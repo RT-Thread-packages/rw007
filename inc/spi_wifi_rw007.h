@@ -68,7 +68,7 @@ struct spi_data_packet
 typedef struct rw007_ap_info_value
 {
     struct rt_wlan_info info;
-    char passwd[PASSWORD_LENGTH_MAX];
+    char passwd[RT_WLAN_PASSWORD_MAX_LENGTH];
 } * rw007_ap_info_value_t;
 
 /* littel endian */
