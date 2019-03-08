@@ -45,7 +45,6 @@ int wifi_spi_device_init(void)
 	
     set_rw007_mode(RW007_SPI_MODE);
 	rt_hw_spi_device_attach(RW007_SPI_BUS_NAME, "wspi", cs_gpiox, cs_pin);
-    // stm32_spi_bus_attach_device(RW007_CS_PIN, RW007_SPI_BUS_NAME, "wspi");
     rt_hw_wifi_init("wspi");
     
     
