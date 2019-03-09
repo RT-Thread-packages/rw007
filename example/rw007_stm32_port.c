@@ -36,15 +36,15 @@ static void set_rw007_mode(int mode)
 int wifi_spi_device_init(void)
 {
     char sn_version[32];
-	
+    
     GPIO_TypeDef *cs_gpiox;
-	uint16_t cs_pin;
-	
-	cs_gpiox = (GPIO_TypeDef *)((rt_base_t)GPIOA + (rt_base_t)(RW007_CS_PIN / 16) * 0x0400UL);
-	cs_pin = (uint16_t)(1 << RW007_CS_PIN % 16);
-	
+    uint16_t cs_pin;
+    
+    cs_gpiox = (GPIO_TypeDef *)((rt_base_t)GPIOA + (rt_base_t)(RW007_CS_PIN / 16) * 0x0400UL);
+    cs_pin = (uint16_t)(1 << RW007_CS_PIN % 16);
+    
     set_rw007_mode(RW007_SPI_MODE);
-	rt_hw_spi_device_attach(RW007_SPI_BUS_NAME, "wspi", cs_gpiox, cs_pin);
+    rt_hw_spi_device_attach(RW007_SPI_BUS_NAME, "wspi", cs_gpiox, cs_pin);
     rt_hw_wifi_init("wspi");
     
     
