@@ -35,8 +35,8 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
     struct spi_cmd_request cmd;
     struct spi_response resp;
 
-    rt_err_t result;
-    const struct spi_data_packet *data_packet = RT_NULL;
+    rt_err_t result = RT_EOK;
+    static const struct spi_data_packet *data_packet = RT_NULL;
     struct rt_spi_device *rt_spi_device = dev->spi_device;
     uint8_t * rx_buffer = rt_mp_alloc(&dev->spi_rx_mp, RT_WAITING_NO);
     /* Disable INT Pin interrupt */
@@ -62,9 +62,13 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
     }
     
     /* Try get data to send to rw007 */
-    result = rt_mb_recv(&dev->spi_tx_mb,
+    if(data_packet == RT_NULL)
+    {
+        result = rt_mb_recv(&dev->spi_tx_mb,
                         (rt_ubase_t *)&data_packet,
                         0);
+    }
+    
     /* Set length for master to slave when data ready*/
     if ((result == RT_EOK) && (data_packet != RT_NULL) && (data_packet->data_len > 0))
     {
@@ -139,11 +143,15 @@ _bad_resp_magic:
         /* End a SPI transmit */
         rt_spi_release_bus(rt_spi_device);
 
-        /* Free send data space */
-        if (data_packet)
+        /* send done Free send data space otherwise resend */
+        if ((resp.flag & RESP_FLAG_SRDY) && data_packet)
         {
             rt_mp_free((void *)data_packet);
             data_packet = RT_NULL;
+        }
+        else if(data_packet)
+        {
+            goto __retry;
         }
 
         /* Parse recevied data */
@@ -159,7 +167,9 @@ _bad_resp_magic:
     {
         return -RT_ERROR;
     }
-
+    
+__retry:
+    
     return RT_EOK;
 }
 
