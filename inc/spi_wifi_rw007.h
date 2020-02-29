@@ -7,6 +7,7 @@
  * Date           Author       Notes
  * 2014-07-31     aozima       the first version
  * 2014-09-18     aozima       update command & response.
+ * 2020-02-28     shaoguoji    add spi transfer retry 
  */
 
 #ifndef SPI_WIFI_H_INCLUDED
@@ -23,6 +24,12 @@ struct spi_cmd_request
     uint32_t magic1;
     uint32_t magic2;
 };
+
+#ifndef RW007_SPI_MAX_HZ
+#define RW007_SPI_MAX_HZ    30000000
+#endif
+
+#define SPI_MAX_RETRY_COUNT    5
 
 #define CMD_MAGIC1 (0x67452301)
 #define CMD_MAGIC2 (0xEFCDAB89)

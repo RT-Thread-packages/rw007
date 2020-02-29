@@ -10,9 +10,12 @@
  * 2017-07-28     armink       fix auto reconnect feature
  * 2018-12-24     zyh          porting rw007 from rw009
  * 2019-02-25     zyh          porting rw007 to wlan 
+ * 2020-02-28     shaoguoji    add spi transfer retry
  */
 #include <rtthread.h>
 #include <string.h>
+
+#define ABS_DIFF(a,b) (((a)>(b))?((a)-(b)):((b)-(a)))
 
 #ifndef RW007_LOG_LEVEL
 #define RW007_LOG_LEVEL DBG_LOG
@@ -32,19 +35,33 @@ static struct rt_event spi_wifi_data_event;
 
 static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
 {
+    static const struct spi_data_packet *pre_data_packet;
+
     struct spi_cmd_request cmd;
     struct spi_response resp;
+    rt_uint32_t pre_tick = 0;
+    rt_uint32_t cur_tick = 0;
+    rt_uint32_t timeout = 10;
 
     rt_err_t result;
     const struct spi_data_packet *data_packet = RT_NULL;
     struct rt_spi_device *rt_spi_device = dev->spi_device;
     uint8_t * rx_buffer = rt_mp_alloc(&dev->spi_rx_mp, RT_WAITING_NO);
+    
     /* Disable INT Pin interrupt */
     spi_wifi_int_cmd(0);
 
-    while (spi_wifi_is_busy())
+    /* Wait for busy */    
+    pre_tick = rt_tick_get();
+    while ((spi_wifi_is_busy()))
     {
         /* wait for idel */
+        cur_tick = rt_tick_get();
+        if (ABS_DIFF(cur_tick, pre_tick) >= timeout)
+        {
+            result = RT_ETIMEOUT;
+            goto _exit;
+        }
     }
 
     /* Clear cmd */
@@ -61,21 +78,44 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
         cmd.flag |= CMD_FLAG_MRDY;
     }
     
-    /* Try get data to send to rw007 */
-    result = rt_mb_recv(&dev->spi_tx_mb,
-                        (rt_ubase_t *)&data_packet,
-                        0);
-    /* Set length for master to slave when data ready*/
-    if ((result == RT_EOK) && (data_packet != RT_NULL) && (data_packet->data_len > 0))
+    if (pre_data_packet)
     {
-        cmd.M2S_len = data_packet->data_len + member_offset(struct spi_data_packet, buffer);
+        data_packet = pre_data_packet; // Retry case, use previous saved data
+    }
+    else
+    {
+        /* Try get data to send to rw007 */
+        result = rt_mb_recv(&dev->spi_tx_mb,
+                            (rt_ubase_t *)&data_packet,
+                            0);
+        /* Set length for master to slave when data ready*/
+        if ((result == RT_EOK) && (data_packet != RT_NULL) && (data_packet->data_len > 0))
+        {
+            cmd.M2S_len = data_packet->data_len + member_offset(struct spi_data_packet, buffer);
+            pre_data_packet = data_packet; // update previous data
+        }
+        result = RT_EOK;
     }
 
     /* Stage 1: Send command to rw007 */
     rt_spi_send(rt_spi_device, &cmd, sizeof(cmd));
-    while (spi_wifi_is_busy())
+
+    /* Wait for busy */
+    if (!spi_wifi_is_busy())
+    {
+        result = -RT_EIO;
+        goto _exit;
+    }
+    pre_tick = rt_tick_get();
+    while ((spi_wifi_is_busy()))
     {
         /* wait for idel */
+        cur_tick = rt_tick_get();
+        if (ABS_DIFF(cur_tick, pre_tick) >= timeout)
+        {
+            result = -RT_ETIMEOUT;
+            goto _exit;
+        }
     }
 
     /* Stage 2: Receive response from rw007 and transmit data */
@@ -99,8 +139,8 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
         /* Check response's magic word */
         if ((resp.magic1 != RESP_MAGIC1) || (resp.magic2 != RESP_MAGIC2))
         {
-            resp.S2M_len = 0;
-            goto _bad_resp_magic;
+            result = RT_EINVAL;
+            goto _exit;
         }
 
         /* Check rw007's data ready flag */
@@ -120,7 +160,7 @@ static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
             if (resp.S2M_len > max_data_len)
                 max_data_len = resp.S2M_len;
         }
-_bad_resp_magic:
+
         /* Setup message */
         if(!resp.S2M_len && rx_buffer)
         {
@@ -136,31 +176,46 @@ _bad_resp_magic:
         /* Transmit data */
         rt_spi_device->bus->ops->xfer(rt_spi_device, &message);
 
-        /* End a SPI transmit */
-        rt_spi_release_bus(rt_spi_device);
-
-        /* Free send data space */
-        if (data_packet)
+        /* Wait for busy */
+        pre_tick = rt_tick_get();
+        while ((spi_wifi_is_busy()))
         {
-            rt_mp_free((void *)data_packet);
-            data_packet = RT_NULL;
+            /* wait for idel */
+            cur_tick = rt_tick_get();
+            if (ABS_DIFF(cur_tick, pre_tick) >= timeout)
+            {
+                result = -RT_ETIMEOUT;
+                goto _exit;
+            }
         }
+    }
+    
+    pre_data_packet = RT_NULL;
 
-        /* Parse recevied data */
-        if(rx_buffer)
-        {
-            rt_mb_send(&dev->spi_rx_mb, (rt_ubase_t)rx_buffer);
-        }
+    if ((cmd.M2S_len == 0) && (resp.S2M_len == 0))
+    {
+        result = -RT_EEMPTY;
+    }
+_exit:
+    /* End a SPI transmit */
+    rt_spi_release_bus(rt_spi_device);
+
+    /* Free send data space */
+    if (data_packet)
+    {
+        rt_mp_free((void *)data_packet);
+        data_packet = RT_NULL;
+    }
+
+    /* Parse recevied data */
+    if(rx_buffer)
+    {
+        rt_mb_send(&dev->spi_rx_mb, (rt_ubase_t)rx_buffer);
     }
     /* Enable INT Pin interrupt */
     spi_wifi_int_cmd(1);
 
-    if ((cmd.M2S_len == 0) && (resp.S2M_len == 0))
-    {
-        return -RT_ERROR;
-    }
-
-    return RT_EOK;
+    return result;
 }
 
 static void wifi_data_process_thread_entry(void *parameter)
@@ -250,6 +305,7 @@ static void spi_wifi_data_thread_entry(void *parameter)
 {
     rt_uint32_t e;
     rt_err_t result;
+    rt_uint32_t retry_count = 0;
 
     while (1)
     {
@@ -265,12 +321,29 @@ static void spi_wifi_data_thread_entry(void *parameter)
 
         /* transfer */
         result = spi_wifi_transfer(&rw007_spi);
+        
+        /* result processing */
+        switch (result)
+        {
+        case RT_EOK:
+            retry_count = SPI_MAX_RETRY_COUNT;
+            break;
+        case RT_ETIMEOUT:
+        case RT_EIO:
+            retry_count--;
+            break;
+        default:
+            continue;
+        }
+
+        if (retry_count == 0)
+        {
+            retry_count = SPI_MAX_RETRY_COUNT;
+            continue;
+        }
 
         /* continue transfer once */
-        if (result == RT_EOK)
-        {
-            rt_event_send(&spi_wifi_data_event, 1);
-        }
+        rt_event_send(&spi_wifi_data_event, 1);
     }
 }
 
@@ -604,7 +677,7 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name)
         struct rt_spi_configuration cfg;
         cfg.data_width = 8;
         cfg.mode = RT_SPI_MODE_0 | RT_SPI_MSB; /* SPI Compatible: Mode 0. */
-        cfg.max_hz = 30 * 1000000;             /* 15M 007 max 30M */
+        cfg.max_hz = RW007_SPI_MAX_HZ;             /* 15M 007 max 30M */
         rt_spi_configure(rw007_spi.spi_device, &cfg);
     }
 
