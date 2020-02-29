@@ -25,6 +25,10 @@ struct spi_cmd_request
     uint32_t magic2;
 };
 
+#ifndef RW007_SPI_MAX_HZ
+#define RW007_SPI_MAX_HZ    30000000
+#endif
+
 #define SPI_MAX_RETRY_COUNT    5
 
 #define CMD_MAGIC1 (0x67452301)
