@@ -51,6 +51,7 @@ int wifi_spi_device_init(void)
     rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);
     rt_wlan_set_mode(RT_WLAN_DEVICE_AP_NAME, RT_WLAN_AP);
     
+    rt_thread_mdelay(2000);
     rw007_sn_get(sn_version);
     rt_kprintf("\nrw007  sn: [%s]\n", sn_version);
     rw007_version_get(sn_version);

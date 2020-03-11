@@ -201,7 +201,7 @@ _exit:
     rt_spi_release_bus(rt_spi_device);
 
     /* Free send data space */
-    if (data_packet)
+    if (data_packet && !pre_data_packet)
     {
         rt_mp_free((void *)data_packet);
         data_packet = RT_NULL;
