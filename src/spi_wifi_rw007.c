@@ -139,6 +139,7 @@ _bad_resp_magic:
         /* End a SPI transmit */
         rt_spi_release_bus(rt_spi_device);
 
+        rt_thread_delay(1);
         /* Free send data space */
         if (data_packet)
         {
