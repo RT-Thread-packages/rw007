@@ -7,7 +7,6 @@
  * Date           Author       Notes
  * 2014-07-31     aozima       the first version
  * 2014-09-18     aozima       update command & response.
- * 2020-02-28     shaoguoji    add spi transfer retry 
  */
 
 #ifndef SPI_WIFI_H_INCLUDED
@@ -15,49 +14,69 @@
 
 #include <stdint.h>
 #include <rtdevice.h>
+typedef enum
+{
+    master_cmd_phase = 0x01,
+    master_data_phase,
+    slave_cmd_phase,
+    slave_data_phase,
+}phase_type;
 
 /* little-endian */
-struct spi_cmd_request
+struct spi_master_request
 {
-    uint32_t flag;
-    uint32_t M2S_len; /* master to slave data len. */
+    uint8_t reserve1;
+    uint8_t flag: 4;
+    uint8_t type: 4;
+    uint16_t reserve2;
+    uint16_t seq;
+    uint16_t M2S_len; // master to slave data len.
     uint32_t magic1;
     uint32_t magic2;
 };
 
-#ifndef RW007_SPI_MAX_HZ
-#define RW007_SPI_MAX_HZ    30000000
-#endif
+#define MASTER_MAGIC1 (0x67452301)
+#define MASTER_MAGIC2 (0xEFCDAB89)
 
-#define SPI_MAX_RETRY_COUNT    5
-
-#define CMD_MAGIC1 (0x67452301)
-#define CMD_MAGIC2 (0xEFCDAB89)
-
-#define CMD_FLAG_MRDY (0x01)
+#define MASTER_FLAG_MRDY (0x01)
 
 /* little-endian */
-struct spi_response
+struct spi_slave_response
 {
-    uint32_t flag;
-    uint32_t S2M_len; /* slave to master data len. */
+    uint8_t reserve1;
+    uint8_t flag: 4;
+    uint8_t type: 4;
+    uint8_t slave_rx_buf: 4;
+    uint8_t slave_tx_buf: 4;
+    uint8_t reserve2;
+    uint16_t seq;
+    uint16_t S2M_len; // slave to master data len.
     uint32_t magic1;
     uint32_t magic2;
 };
 
-#define RESP_MAGIC1 (0x98BADCFE)
-#define RESP_MAGIC2 (0x10325476)
+#define SLAVE_MAGIC1 (0x98BADCFE)
+#define SLAVE_MAGIC2 (0x10325476)
+#define SLAVE_FLAG_SRDY (0x01)
 
-#define RESP_FLAG_SRDY (0x01)
+#define SLAVE_DATA_FULL (0x01)
 
 /* spi buffer configure. */
 #define SPI_MAX_DATA_LEN 1520
 #define SPI_TX_POOL_SIZE 4
 #define SPI_RX_POOL_SIZE 4
+/*  The slave interrupts wait timeout */
+#define SLAVE_INT_TIMEOUT  100
 
 typedef enum
 {
-    DATA_TYPE_STA_ETH_DATA = 0,
+    RW007_SLAVE_INT = 1,
+    RW007_MASTER_DATA = 1<<1,
+} wifi_event;
+
+typedef enum
+{
+    DATA_TYPE_STA_ETH_DATA = 1,
     DATA_TYPE_AP_ETH_DATA,
     DATA_TYPE_PROMISC_ETH_DATA,
     DATA_TYPE_CMD,
@@ -183,8 +202,7 @@ struct rw007_wifi
 
 /* porting */
 extern void spi_wifi_hw_init(void);
-extern void spi_wifi_int_cmd(rt_bool_t cmd);
-extern rt_bool_t spi_wifi_is_busy(void);
+
 /* end porting */
 
 /* api exclude in wlan framework */

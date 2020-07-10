@@ -11,17 +11,15 @@
  * 2018-12-24     zyh          porting rw007 from rw009
  * 2019-02-25     zyh          porting rw007 to wlan 
  * 2020-02-28     shaoguoji    add spi transfer retry
+ * 2020-07-09     zj           refactor the rw007
  */
 #include <rtthread.h>
 #include <string.h>
-
-#define ABS_DIFF(a,b) (((a)>(b))?((a)-(b)):((b)-(a)))
 
 #ifndef RW007_LOG_LEVEL
 #define RW007_LOG_LEVEL DBG_LOG
 #endif
 
-#define DBG_ENABLE
 #define DBG_SECTION_NAME "[RW007]"
 #define DBG_LEVEL RW007_LOG_LEVEL
 #define DBG_COLOR
@@ -32,179 +30,163 @@
 static struct rw007_spi rw007_spi;
 static struct rw007_wifi wifi_sta, wifi_ap;
 static struct rt_event spi_wifi_data_event;
+static rt_bool_t inited = RT_FALSE;
 
-static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
+#ifdef WLAN_DEV_MONITOR
+typedef struct
 {
-    static const struct spi_data_packet *pre_data_packet;
+    rt_uint32_t total;
+    rt_uint32_t lose;
+    rt_uint32_t retry;
+    rt_uint32_t first_stage_err;
+    rt_uint32_t second_stage_err;
+} net_packet;
+net_packet packet;
+#endif
 
-    struct spi_cmd_request cmd;
-    struct spi_response resp;
-    rt_uint32_t pre_tick = 0;
-    rt_uint32_t cur_tick = 0;
-    rt_uint32_t timeout = 10;
-
-    rt_err_t result;
-    const struct spi_data_packet *data_packet = RT_NULL;
+static rt_err_t wifi_data_transfer(struct rw007_spi *dev, uint16_t seq, uint8_t *rx_buffer)
+{
+    static const struct spi_data_packet *send_packet = RT_NULL;
+    struct spi_master_request cmd;
+    struct spi_slave_response resp;
+    struct rt_spi_message message;
     struct rt_spi_device *rt_spi_device = dev->spi_device;
-    uint8_t * rx_buffer = rt_mp_alloc(&dev->spi_rx_mp, RT_WAITING_NO);
-    
-    /* Disable INT Pin interrupt */
-    spi_wifi_int_cmd(0);
-
-    /* Wait for busy */    
-    pre_tick = rt_tick_get();
-    while ((spi_wifi_is_busy()))
-    {
-        /* wait for idel */
-        cur_tick = rt_tick_get();
-        if (ABS_DIFF(cur_tick, pre_tick) >= timeout)
-        {
-            result = RT_ETIMEOUT;
-            goto _exit;
-        }
-    }
+    rt_uint32_t max_data_len = 0;
 
     /* Clear cmd */
-    cmd.flag = 0;
-    cmd.M2S_len = 0;
-
+    rt_memset(&cmd, 0, sizeof(cmd));
+    cmd.type = master_cmd_phase;
+    cmd.seq = seq;
     /* Set magic word */
-    cmd.magic1 = CMD_MAGIC1;
-    cmd.magic2 = CMD_MAGIC2;
+    cmd.magic1 = MASTER_MAGIC1;
+    cmd.magic2 = MASTER_MAGIC2;
 
-    /* Set master ready flag bit */
-    if(rx_buffer)
+    /* If the buffer is not full, Set master ready flag bit */
+    if(rx_buffer != RT_NULL)
     {
-        cmd.flag |= CMD_FLAG_MRDY;
+        cmd.flag |= MASTER_FLAG_MRDY;
     }
-    
-    if (pre_data_packet)
+
+    if (send_packet == RT_NULL)
     {
-        data_packet = pre_data_packet; // Retry case, use previous saved data
-    }
-    else
-    {
-        /* Try get data to send to rw007 */
-        result = rt_mb_recv(&dev->spi_tx_mb,
-                            (rt_ubase_t *)&data_packet,
-                            0);
-        /* Set length for master to slave when data ready*/
-        if ((result == RT_EOK) && (data_packet != RT_NULL) && (data_packet->data_len > 0))
+        /* Check to see if any data needs to be sent */
+        if (rt_mb_recv(&dev->spi_tx_mb, (rt_ubase_t *)&send_packet, RT_WAITING_NO) != RT_EOK)
         {
-            cmd.M2S_len = data_packet->data_len + member_offset(struct spi_data_packet, buffer);
-            pre_data_packet = data_packet; // update previous data
+            send_packet = RT_NULL;
         }
-        result = RT_EOK;
+    }
+
+    /* Set length for master to slave when data ready*/
+    if (send_packet != RT_NULL)
+    {
+        /* Invalid data packet */
+        if((send_packet->data_len == 0) || (send_packet->data_len > SPI_MAX_DATA_LEN))
+        {
+            rt_mp_free((void *)send_packet);
+            send_packet = RT_NULL;     
+        }
+        else
+        {
+            cmd.M2S_len = send_packet->data_len + member_offset(struct spi_data_packet, buffer);
+        }
     }
 
     /* Stage 1: Send command to rw007 */
-    rt_spi_send(rt_spi_device, &cmd, sizeof(cmd));
+    rt_memset(&resp, 0, sizeof(resp));
+    rt_spi_transfer(rt_spi_device, &cmd, &resp, sizeof(resp));
 
-    /* Wait for busy */
-    if (!spi_wifi_is_busy())
+    /* Clear event */
+    rt_event_recv(&spi_wifi_data_event,
+                        RW007_SLAVE_INT,
+                        RT_EVENT_FLAG_AND | RT_EVENT_FLAG_CLEAR,
+                        RT_WAITING_NO,
+                        RT_NULL);
+    /* checkout Stage 1 slave status */
+    if ((resp.magic1 != SLAVE_MAGIC1) || (resp.magic2 != SLAVE_MAGIC2) || (resp.type != slave_cmd_phase))
     {
-        result = -RT_EIO;
-        goto _exit;
+#ifdef WLAN_DEV_MONITOR
+        packet.first_stage_err++;
+#endif
+        LOG_E("The wifi Stage 1 status %x %x %x %d\r",  resp.magic1, resp.magic2, resp.type, cmd.seq);
+        goto _cmderr;
     }
-    pre_tick = rt_tick_get();
-    while ((spi_wifi_is_busy()))
+
+    /* receive first event */
+    if (rt_event_recv(&spi_wifi_data_event,
+                        RW007_SLAVE_INT,
+                        RT_EVENT_FLAG_AND | RT_EVENT_FLAG_CLEAR,
+                        SLAVE_INT_TIMEOUT,
+                        RT_NULL) != RT_EOK)
     {
-        /* wait for idel */
-        cur_tick = rt_tick_get();
-        if (ABS_DIFF(cur_tick, pre_tick) >= timeout)
-        {
-            result = -RT_ETIMEOUT;
-            goto _exit;
-        }
+        LOG_E("The wifi slave response timed out\r");
     }
 
-    /* Stage 2: Receive response from rw007 and transmit data */
-    {
-        struct rt_spi_message message;
-        uint32_t max_data_len = 0;
+    /* Stage 2: Receive response from rw007 */
+    cmd.type = master_data_phase;   //data Stage
+    rt_memset(&resp, 0, sizeof(resp));
+    message.send_buf = &cmd;
+    message.recv_buf = &resp;
+    message.length = sizeof(resp);
+    message.cs_take = 1;
+    message.cs_release = 0;
 
-        /* Setup message */
-        message.send_buf = RT_NULL;
-        message.recv_buf = &resp;
-        message.length = sizeof(resp);
-        message.cs_take = 1;
-        message.cs_release = 0;
+    /* Start a SPI transmit */
+    rt_spi_take_bus(rt_spi_device);
 
-        /* Start a SPI transmit */
-        rt_spi_take_bus(rt_spi_device);
-
-        /* Receive response from rw007 */
-        rt_spi_device->bus->ops->xfer(rt_spi_device, &message);
-
-        /* Check response's magic word */
-        if ((resp.magic1 != RESP_MAGIC1) || (resp.magic2 != RESP_MAGIC2))
-        {
-            result = RT_EINVAL;
-            goto _exit;
-        }
-
-        /* Check rw007's data ready flag */
-        if (resp.flag & RESP_FLAG_SRDY)
-        {
-            max_data_len = cmd.M2S_len;
-        }
-
-        if (resp.S2M_len)
-        {
-            if (resp.S2M_len > MAX_SPI_PACKET_SIZE)
-            {
-                /* Drop error data */
-                resp.S2M_len = 0;
-            }
-
-            if (resp.S2M_len > max_data_len)
-                max_data_len = resp.S2M_len;
-        }
-
-        /* Setup message */
-        if(!resp.S2M_len && rx_buffer)
-        {
-            rt_mp_free(rx_buffer);
-            rx_buffer = RT_NULL;
-        }
-        message.send_buf = data_packet;
-        message.recv_buf = rx_buffer;
-        message.length = RT_ALIGN(max_data_len, 4);/* align clk to word */
-        message.cs_take = 0;
-        message.cs_release = 1;
-
-        /* Transmit data */
-        rt_spi_device->bus->ops->xfer(rt_spi_device, &message);
-
-        /* Wait for busy */
-        pre_tick = rt_tick_get();
-        while ((spi_wifi_is_busy()))
-        {
-            /* wait for idel */
-            cur_tick = rt_tick_get();
-            if (ABS_DIFF(cur_tick, pre_tick) >= timeout)
-            {
-                result = -RT_ETIMEOUT;
-                goto _exit;
-            }
-        }
-    }
+    /* Receive response from rw007 */
+    rt_spi_device->bus->ops->xfer(rt_spi_device, &message);
     
-    pre_data_packet = RT_NULL;
-
-    if ((cmd.M2S_len == 0) && (resp.S2M_len == 0))
+    /* Check response's magic word and seq */
+    if ((resp.magic1 != SLAVE_MAGIC1) || (resp.magic2 != SLAVE_MAGIC2) || (resp.seq != seq) || (resp.type != slave_data_phase))
     {
-        result = -RT_EEMPTY;
+#ifdef WLAN_DEV_MONITOR
+        packet.second_stage_err++;
+#endif
+        LOG_E("The wifi Stage 2 status %x %x %x %x %d %d\r",  resp.magic1, resp.magic2, resp.seq, resp.type, resp.S2M_len, cmd.seq);
+        goto _txerr;
     }
-_exit:
+
+    /* Check rw007's data ready flag */
+    if (resp.flag & SLAVE_FLAG_SRDY)
+    {
+        max_data_len = cmd.M2S_len;
+    }
+
+    if (resp.S2M_len > MAX_SPI_PACKET_SIZE)
+    {
+        /* Drop error data */
+        resp.S2M_len = 0;
+    }
+
+    if (resp.S2M_len > max_data_len)
+    {
+        max_data_len = resp.S2M_len;
+    }
+
+    /* Setup message */
+    if((resp.S2M_len == 0) && (rx_buffer != RT_NULL))
+    {
+        rt_mp_free(rx_buffer);
+        rx_buffer = RT_NULL;
+    }
+
+    message.send_buf = send_packet;
+    message.recv_buf = rx_buffer;
+    message.length = RT_ALIGN(max_data_len, 4);/* align clk to word */
+    message.cs_take = 0;
+    message.cs_release = 1;
+
+    /* Transmit data */
+    rt_spi_device->bus->ops->xfer(rt_spi_device, &message);
+
     /* End a SPI transmit */
     rt_spi_release_bus(rt_spi_device);
 
     /* Free send data space */
-    if (data_packet && !pre_data_packet)
+    if ((resp.flag & SLAVE_FLAG_SRDY) && (send_packet != RT_NULL))
     {
-        rt_mp_free((void *)data_packet);
-        data_packet = RT_NULL;
+        rt_mp_free((void *)send_packet);
+        send_packet = RT_NULL;
     }
 
     /* Parse recevied data */
@@ -212,16 +194,98 @@ _exit:
     {
         rt_mb_send(&dev->spi_rx_mb, (rt_ubase_t)rx_buffer);
     }
-    /* Enable INT Pin interrupt */
-    spi_wifi_int_cmd(1);
 
-    return result;
+    /* receive data end event */
+    if (rt_event_recv(&spi_wifi_data_event,
+                        RW007_SLAVE_INT,
+                        RT_EVENT_FLAG_AND | RT_EVENT_FLAG_CLEAR,
+                        SLAVE_INT_TIMEOUT,
+                        RT_NULL) != RT_EOK)
+    {
+        LOG_E("The wifi slave data response timed out\r");
+    }
+
+    /* The slave has data */
+    if (resp.slave_tx_buf > 0)
+    {
+        return SLAVE_DATA_FULL;
+    }
+    return RT_EOK;
+_txerr:
+    /* END SPI transfer */
+    message.send_buf = RT_NULL;
+    message.recv_buf = RT_NULL;
+    message.length = 0;
+    message.cs_take = 0;
+    message.cs_release = 1;
+    rt_spi_device->bus->ops->xfer(rt_spi_device, &message);
+
+    rt_spi_release_bus(rt_spi_device);  // End a SPI transmit 
+_cmderr:
+    rt_thread_delay(1);
+    return -RT_ERROR;
+}
+
+static rt_err_t spi_wifi_transfer(struct rw007_spi *dev)
+{
+    static uint16_t cmd_seq = 0;
+    rt_err_t result;
+    uint8_t * rx_buffer = rt_mp_alloc(&dev->spi_rx_mp, RT_WAITING_NO);
+    int32_t retry;
+
+    /* Generate the transmission sequence number */
+    cmd_seq++;
+    if (cmd_seq >= 65534)
+    {
+        cmd_seq = 1;
+    }
+#ifdef WLAN_DEV_MONITOR
+        packet.total++;
+#endif
+    /* set retry count */
+    retry = 3;
+    while (retry > 0)
+    {
+        result = wifi_data_transfer(dev, cmd_seq, rx_buffer);
+        if (result >= 0)
+        {
+            break;
+        }
+        retry--;
+#ifdef WLAN_DEV_MONITOR
+        packet.retry++;
+#endif
+    }
+
+    /* Receive response from rw007 error */
+    if (retry <= 0)
+    {
+#ifdef WLAN_DEV_MONITOR
+        packet.lose++;
+#endif
+        LOG_E("rw007 transfer failed\r");
+        goto _err;
+    }
+
+    if (result > 0)
+    {
+        return SLAVE_DATA_FULL;
+    }
+
+    return RT_EOK;
+_err:
+    if(rx_buffer)
+    {
+        rt_mp_free((void *)rx_buffer);
+    }
+    return -RT_ERROR;
 }
 
 static void wifi_data_process_thread_entry(void *parameter)
 {
     const struct spi_data_packet *data_packet = RT_NULL;
     struct rw007_spi *dev = (struct rw007_spi *)parameter;
+
     while(1)
     {
         /* get the mempool memory for recv data package */
@@ -303,47 +367,44 @@ static void wifi_data_process_thread_entry(void *parameter)
 
 static void spi_wifi_data_thread_entry(void *parameter)
 {
-    rt_uint32_t e;
+    rt_bool_t empty_read = RT_TRUE;
+    rt_uint32_t event;
     rt_err_t result;
-    rt_uint32_t retry_count = 0;
-
+    
     while (1)
     {
         /* receive first event */
         if (rt_event_recv(&spi_wifi_data_event,
-                          1,
-                          RT_EVENT_FLAG_AND | RT_EVENT_FLAG_CLEAR,
+                          RW007_MASTER_DATA|
+                          RW007_SLAVE_INT,
+                          RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,
                           RT_WAITING_FOREVER,
-                          &e) != RT_EOK)
+                          &event) != RT_EOK)
+                          
         {
             continue;
         }
-
         /* transfer */
         result = spi_wifi_transfer(&rw007_spi);
-        
-        /* result processing */
-        switch (result)
-        {
-        case RT_EOK:
-            retry_count = SPI_MAX_RETRY_COUNT;
-            break;
-        case RT_ETIMEOUT:
-        case RT_EIO:
-            retry_count--;
-            break;
-        default:
-            continue;
-        }
 
-        if (retry_count == 0)
+        /* Try reading again */
+        if(result == SLAVE_DATA_FULL)
         {
-            retry_count = SPI_MAX_RETRY_COUNT;
-            continue;
+            rt_event_send(&spi_wifi_data_event, RW007_SLAVE_INT);
+            empty_read = RT_TRUE;
         }
-
-        /* continue transfer once */
-        rt_event_send(&spi_wifi_data_event, 1);
+        else 
+        {
+            if ((result == RT_EOK) && (empty_read == RT_TRUE))
+            {
+                rt_event_send(&spi_wifi_data_event, RW007_SLAVE_INT);
+                empty_read = RT_FALSE;
+            }
+            else
+            {
+                empty_read = RT_TRUE;
+            }
+        }
     }
 }
 
@@ -379,7 +440,7 @@ rt_inline void spi_send_cmd(struct rw007_spi * hspi, RW00x_CMD COMMAND, void * b
     data_packet->data_len = member_offset(struct rw007_cmd, value) + cmd->len;
 
     rt_mb_send(&hspi->spi_tx_mb, (rt_uint32_t)data_packet);
-    rt_event_send(&spi_wifi_data_event, 1);
+    rt_event_send(&spi_wifi_data_event, RW007_MASTER_DATA);
 }
 
 rt_inline rt_err_t spi_set_data(struct rt_wlan_device *wlan, RW00x_CMD COMMAND, void * buffer, rt_uint32_t len)
@@ -448,10 +509,9 @@ rt_err_t rw007_version_get(char version[16])
 
 static rt_err_t wlan_init(struct rt_wlan_device *wlan)
 {
-    static int inited = 0;
-    if(!inited)
+    if(inited == RT_FALSE)
     {
-        inited = 1;
+        inited = RT_TRUE;
         return spi_set_data(wlan, RW00x_CMD_INIT, RT_NULL, 0);
     }
     return RT_EOK;
@@ -619,7 +679,7 @@ static int wlan_send(struct rt_wlan_device *wlan, void *buff, int len)
     rt_memcpy(data_packet->buffer, buff, len);
 
     rt_mb_send(&hspi->spi_tx_mb, (rt_uint32_t)data_packet);
-    rt_event_send(&spi_wifi_data_event, 1);
+    rt_event_send(&spi_wifi_data_event, RW007_MASTER_DATA);
     return len;
 }
 
@@ -670,14 +730,12 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name)
         return -RT_ENOSYS;
     }
 
-    spi_wifi_hw_init();
-
     /* config spi */
     {
         struct rt_spi_configuration cfg;
         cfg.data_width = 8;
         cfg.mode = RT_SPI_MODE_0 | RT_SPI_MSB; /* SPI Compatible: Mode 0. */
-        cfg.max_hz = RW007_SPI_MAX_HZ;             /* 15M 007 max 30M */
+        cfg.max_hz = 30 * 1000000;             /* 15M 007 max 30M */
         rt_spi_configure(rw007_spi.spi_device, &cfg);
     }
 
@@ -757,8 +815,9 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name)
         }
         rt_thread_startup(tid);
     }
-    /* Start first transfer */
-    rt_event_send(&spi_wifi_data_event, 1);
+
+    spi_wifi_hw_init();
+
     return RT_EOK;
 }
 
@@ -768,8 +827,51 @@ void spi_wifi_isr(int vector)
     rt_interrupt_enter();
 
     /* device has a package to ready transfer */
-    rt_event_send(&spi_wifi_data_event, 1);
+    rt_event_send(&spi_wifi_data_event, RW007_SLAVE_INT);
 
     /* leave interrupt */
     rt_interrupt_leave();
 }
+
+#ifdef WLAN_DEV_MONITOR
+int rw007_dump(int argc, char **argv)
+{
+    if (argc == 1)
+    {
+        goto __usage;
+    }
+
+    if (strcmp(argv[1], "--show") == 0)
+    {
+        rt_kprintf("Wifi Device transmission information:\n");
+        rt_kprintf("Total packets      : %d\n", packet.total);
+        rt_kprintf("Failed packets     : %d\n", packet.lose);
+        rt_kprintf("Retry count        : %d\n", packet.retry);
+        rt_kprintf("Stage 1 error      : %d\n", packet.first_stage_err);
+        rt_kprintf("Stage 2 error      : %d\n", packet.second_stage_err);
+    }
+    else if (strcmp(argv[1], "-h") == 0)
+    {
+        goto __usage;
+    }
+    else if (strcmp(argv[1], "-c") == 0)
+    {
+        rt_memset(&packet, 0, sizeof(packet));
+    }
+    return 0;
+__usage:
+    rt_kprintf("Usage: wifi_dump [-s|-c]\n");
+    rt_kprintf("\n");
+    rt_kprintf("Miscellaneous:\n");
+    rt_kprintf("  -h           print this message and quit\n");
+    rt_kprintf("  --show       show information\n");
+    rt_kprintf("  -c           Clear record data\n");
+    return 0;
+}
+
+#ifdef RT_USING_FINSH
+    #include <finsh.h>
+    MSH_CMD_EXPORT(rw007_dump, the rw007 Informations Viewer);
+#endif
+#endif
+
