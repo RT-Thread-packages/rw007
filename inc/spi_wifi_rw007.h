@@ -168,8 +168,16 @@ typedef enum
     RW00x_CMD_GET_COUNTRY,
     RW00x_CMD_AP_MAC_GET,
     RW00x_CMD_AP_MAC_SET,
+    RW00x_CMD_BLE_MODE_SET,
+    RW00x_CMD_BLE_WIFI_INFO_GET,
     RW00x_CMD_MAX_NUM
 }RW00x_CMD;
+
+struct sdio_ble_connect_info
+{
+    rt_wlan_ssid_t ssid;
+    rt_wlan_key_t key;
+};
 
 struct rw007_spi
 {
@@ -194,6 +202,8 @@ struct rw007_spi
     rt_event_t rw007_cmd_event;
     /* response data */
     struct rw007_resp * resp[RW00x_CMD_MAX_NUM];
+
+    struct sdio_ble_connect_info ble_connect_info;
 };
 
 #define RW00x_CMD_RESP_EVENT(n)     (0x01UL << n)

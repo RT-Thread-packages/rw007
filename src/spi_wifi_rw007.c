@@ -12,6 +12,7 @@
  * 2019-02-25     zyh          porting rw007 to wlan 
  * 2020-02-28     shaoguoji    add spi transfer retry
  * 2020-07-09     zj           refactor the rw007
+ * 2020-09-17     rice         add BLE networking
  */
 #include <rtthread.h>
 #include <string.h>
@@ -501,6 +502,26 @@ rt_err_t rw007_version_get(char version[16])
 {
     rt_uint32_t size_of_data;
     return spi_get_data(wifi_sta.wlan, RW00x_CMD_GET_VSR, version, &size_of_data);
+}
+
+rt_err_t rw007_ble_mode_set(rt_uint8_t enable, rt_uint8_t auto_connect)
+{
+    rt_uint8_t ble_mode[2];
+    ble_mode[0] = enable;
+    ble_mode[1] = auto_connect;
+    return spi_set_data(wifi_sta.wlan, RW00x_CMD_BLE_MODE_SET, ble_mode, sizeof(ble_mode));
+}
+
+rt_err_t rw007_ble_wifi_info_get()
+{
+    rt_err_t result = 0;
+    rt_uint32_t length = 0;
+    result = spi_get_data(wifi_sta.wlan, RW00x_CMD_BLE_WIFI_INFO_GET, &rw007_spi.ble_connect_info, &length);
+    if(result == RT_EOK)
+    {
+        rt_kprintf("ssid: %s, passwd: %s\n", rw007_spi.ble_connect_info.ssid.val, rw007_spi.ble_connect_info.key.val);
+    }
+    return result;
 }
 
 static rt_err_t wlan_init(struct rt_wlan_device *wlan)
