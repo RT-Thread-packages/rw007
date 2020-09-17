@@ -7,6 +7,7 @@
  * Date           Author       Notes
  * 2014-07-31     aozima       the first version
  * 2014-09-18     aozima       update command & response.
+ * 2020-09-17     rice         add BLE networking
  */
 
 #ifndef SPI_WIFI_H_INCLUDED
@@ -173,6 +174,18 @@ typedef enum
     RW00x_CMD_MAX_NUM
 }RW00x_CMD;
 
+typedef enum
+{
+    RW00x_BLE_ENABLE,
+    RW00x_BLE_DISABLE,
+}RW00x_BLE_STATUS;
+
+typedef enum
+{
+    AUTO_CONNECT_MODE,
+    NONAUTO_CONNECT_MODE,
+}RW00x_WIFI_CONNECT_MODE;
+
 struct sdio_ble_connect_info
 {
     rt_wlan_ssid_t ssid;
@@ -202,8 +215,6 @@ struct rw007_spi
     rt_event_t rw007_cmd_event;
     /* response data */
     struct rw007_resp * resp[RW00x_CMD_MAX_NUM];
-
-    struct sdio_ble_connect_info ble_connect_info;
 };
 
 #define RW00x_CMD_RESP_EVENT(n)     (0x01UL << n)
@@ -224,6 +235,8 @@ extern void spi_wifi_hw_init(void);
 /* api exclude in wlan framework */
 extern rt_err_t rw007_sn_get(char sn[24]);
 extern rt_err_t rw007_version_get(char version[16]);
+extern rt_err_t rw007_ble_mode_set(rt_uint8_t enable, rt_uint8_t auto_connect);
+extern rt_err_t rw007_ble_wifi_info_get(struct sdio_ble_connect_info *ble_connect_info);
 /* end api exclude in wlan framework */
 
 extern rt_err_t rt_hw_wifi_init(const char *spi_device_name);

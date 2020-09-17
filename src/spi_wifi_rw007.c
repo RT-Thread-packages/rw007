@@ -512,16 +512,10 @@ rt_err_t rw007_ble_mode_set(rt_uint8_t enable, rt_uint8_t auto_connect)
     return spi_set_data(wifi_sta.wlan, RW00x_CMD_BLE_MODE_SET, ble_mode, sizeof(ble_mode));
 }
 
-rt_err_t rw007_ble_wifi_info_get()
+rt_err_t rw007_ble_wifi_info_get(struct sdio_ble_connect_info *ble_connect_info)
 {
-    rt_err_t result = 0;
     rt_uint32_t length = 0;
-    result = spi_get_data(wifi_sta.wlan, RW00x_CMD_BLE_WIFI_INFO_GET, &rw007_spi.ble_connect_info, &length);
-    if(result == RT_EOK)
-    {
-        rt_kprintf("ssid: %s, passwd: %s\n", rw007_spi.ble_connect_info.ssid.val, rw007_spi.ble_connect_info.key.val);
-    }
-    return result;
+    return spi_get_data(wifi_sta.wlan, RW00x_CMD_BLE_WIFI_INFO_GET, ble_connect_info, &length);
 }
 
 static rt_err_t wlan_init(struct rt_wlan_device *wlan)
