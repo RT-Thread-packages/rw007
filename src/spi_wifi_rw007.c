@@ -760,7 +760,7 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name)
     rt_mb_init(&rw007_spi.spi_rx_mb,
                "spi_rx",
                &rw007_spi.spi_rx_mb_pool[0],
-               SPI_TX_POOL_SIZE,
+               SPI_RX_POOL_SIZE,
                RT_IPC_FLAG_PRIO);
 
     /* init spi data notify event */
