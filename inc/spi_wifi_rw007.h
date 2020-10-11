@@ -181,14 +181,14 @@ struct rw007_spi
     ALIGN(4)
     rt_uint8_t spi_tx_mempool[(sizeof(struct spi_data_packet) + 4) * SPI_TX_POOL_SIZE];
     struct rt_mailbox spi_tx_mb;
-    int spi_tx_mb_pool[SPI_TX_POOL_SIZE + 1];
+    rt_ubase_t spi_tx_mb_pool[SPI_TX_POOL_SIZE + 1];
     
     /* Rx mempool and mailbox */
     struct rt_mempool spi_rx_mp;
     ALIGN(4)
     rt_uint8_t spi_rx_mempool[(sizeof(struct spi_data_packet) + 4) * SPI_RX_POOL_SIZE];
     struct rt_mailbox spi_rx_mb;
-    int spi_rx_mb_pool[SPI_RX_POOL_SIZE + 1];
+    rt_ubase_t spi_rx_mb_pool[SPI_RX_POOL_SIZE + 1];
 
     /* response event */
     rt_event_t rw007_cmd_event;
