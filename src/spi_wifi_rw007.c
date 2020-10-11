@@ -435,7 +435,7 @@ rt_inline void spi_send_cmd(struct rw007_spi * hspi, RW00x_CMD COMMAND, void * b
 
     data_packet->data_len = member_offset(struct rw007_cmd, value) + cmd->len;
 
-    rt_mb_send(&hspi->spi_tx_mb, (rt_uint32_t)data_packet);
+    rt_mb_send(&hspi->spi_tx_mb, (rt_ubase_t)data_packet);
     rt_event_send(&spi_wifi_data_event, RW007_MASTER_DATA);
 }
 
@@ -674,7 +674,7 @@ static int wlan_send(struct rt_wlan_device *wlan, void *buff, int len)
 
     rt_memcpy(data_packet->buffer, buff, len);
 
-    rt_mb_send(&hspi->spi_tx_mb, (rt_uint32_t)data_packet);
+    rt_mb_send(&hspi->spi_tx_mb, (rt_ubase_t)data_packet);
     rt_event_send(&spi_wifi_data_event, RW007_MASTER_DATA);
     return len;
 }
