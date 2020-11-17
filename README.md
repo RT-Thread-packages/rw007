@@ -1,57 +1,59 @@
 # rw007
 
-## 1. 简介
+[中文页](README_ZH.md) | English
 
-**RW007**是由上海睿赛德电子科技有限公司开发基于Cortex-M4 WIFI SOC的SPI/UART 高速wifi模块。该仓库为**rw007**的SPI驱动
+## 1. Introduction
 
-**RW007**硬件设计简单，SPI模式下用户只需要预留1组SPI信号，一个中断输入，一个IO输出即可，包含电源和地总共8个引脚。
+**RW007** is a SPI/UART high-speed wifi module based on Cortex-M4 WIFI SOC developed by Shanghai Ruiside Electronic Technology Co., Ltd. The warehouse is the SPI driver of **rw007**
 
-### 1.1. 文件结构
+**RW007** The hardware design is simple. In SPI mode, users only need to reserve 1 set of SPI signals, one interrupt input, and one IO output, including a total of 8 pins for power and ground.
 
-| 文件夹 | 说明 |
+### 1.1. File structure
+
+| Folder | Description |
 | ---- | ---- |
-| src  | 核心驱动源码，主要实现通信逻辑 |
-| inc  | 头文件目录 |
-| example | 平台移植示例 |
+| src | Core driver source code, which mainly implements communication logic |
+| inc | Header file directory |
+| example | Platform porting example |
 
-### 1.2 许可证
+### 1.2 License
 
-at_device package 遵循 Apache 2.0 许可，详见 `LICENSE` 文件。
+The at_device package complies with the Apache 2.0 license, see the `LICENSE` file for details.
 
-### 1.3 依赖
+### 1.3 Dependency
 
 - RT-Thread 3.0+
-- RT-Thread LWIP 组件
-- RT-Thread SPI 驱动框架
-- RT-Thread PIN 驱动框架(示例平台代码依赖)
+- RT-Thread LWIP component
+- RT-Thread SPI driver framework
+- RT-Thread PIN driver framework (sample platform code dependency)
 
-### 1.4 配置宏说明
+### 1.4 Configuration Macro Description
 
-自动配置时相关配置宏将在env中被配置 手动配置参考如下
+The relevant configuration macros will be configured in env during automatic configuration. The manual configuration is as follows
 
-类型说明
+Type description
 
-- bool: 定义生效 未定义 不生效
-- string: 字符串
-- int: 数值
+- bool: definition is valid, undefined, not valid
+- string: string
+- int: number
 
-|宏|类型|功能|
+|Macro|Type|Function|
 |--|--|--|
-|PKG_USING_RW007|bool|开启rw007驱动，使用该软件包则需要定义该宏|
-|RW007_USING_STM32_DRIVERS|bool|使能STM32平台移植示例|
-|RW007_USING_IMXRT_DRIVERS|bool|使能IMXRT平台移植示例|
-|RW007_SPI_BUS_NAME|string|example中使用的SPI总线设备名称|
-|RW007_CS_PIN|int|example中使用的SPI 片选引脚在pin驱动中的序号|
-|RW007_BOOT0_PIN|int|example中使用的BOOT0引脚在pin驱动中的序号(与SPI的CLK是同一引脚复用)|
-|RW007_BOOT1_PIN|int|example中使用的BOOT1引脚在pin驱动中的序号(与SPI的CS是同一引脚复用)|
-|RW007_INT_BUSY_PIN|int|example中使用的INT/BUSY引脚在pin驱动中的序号|
-|RW007_RST_PIN|int|example中使用的RST引脚在pin驱动中的序号|
+|PKG_USING_RW007|bool|Enable rw007 driver, use this software package, you need to define this macro|
+|RW007_USING_STM32_DRIVERS|bool|Enable STM32 platform migration example|
+|RW007_USING_IMXRT_DRIVERS|bool|Enable IMXRT platform migration example|
+|RW007_SPI_BUS_NAME|string|The SPI bus device name used in example|
+|RW007_CS_PIN|int|The serial number of the SPI chip select pin used in the example in the pin driver|
+|RW007_BOOT0_PIN|int|The serial number of the BOOT0 pin used in the example in the pin driver (the same pin is multiplexed with the CLK of SPI)|
+|RW007_BOOT1_PIN|int|The serial number of the BOOT1 pin used in the example in the pin driver (the same pin is multiplexed with the CS of SPI)|
+|RW007_INT_BUSY_PIN|int|The serial number of the INT/BUSY pin used in the example in the pin driver|
+|RW007_RST_PIN|int|The serial number of the RST pin used in the example in the pin driver|
 
-## 2. 注意事项
+## 2. Matters needing attention
 
-由于存在引脚复用情况，所以bsp的SPI的驱动需要引脚配置在Config时进行。
+Because of the pin multiplexing situation, the driver of the bsp SPI needs to be configured during Config.
 
-## 4. 联系方式
+## 4. Contact
 
-- 维护：RT-Thread 开发团队
-- 主页：https://github.com/RT-Thread-packages/rw007
+- Maintenance: RT-Thread development team
+- Homepage: https://github.com/RT-Thread-packages/rw007
