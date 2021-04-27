@@ -94,14 +94,27 @@ static int wifi_data_transfer(struct rw007_spi *dev, uint16_t seq, uint8_t *rx_b
 
     /* Stage 1: Send command to rw007 */
     rt_memset(&resp, 0, sizeof(resp));
-    rt_spi_transfer(rt_spi_device, &cmd, &resp, sizeof(resp));
+	message.send_buf = &cmd;
+    message.recv_buf = &resp;
+    message.length = sizeof(resp);
+    message.cs_take = 1;
+    message.cs_release = 0;
+    message.next  = RT_NULL;
+    /* Start a SPI transmit */
+    rt_spi_take_bus(rt_spi_device);
 
+    /* Receive response from rw007 */
+    rt_spi_device->bus->ops->xfer(rt_spi_device, &message);
     /* Clear event */
     rt_event_recv(&spi_wifi_data_event,
                         RW007_SLAVE_INT,
                         RT_EVENT_FLAG_AND | RT_EVENT_FLAG_CLEAR,
                         RT_WAITING_NO,
                         RT_NULL);
+    rt_spi_release(rt_spi_device);
+    /* End a SPI transmit */
+    rt_spi_release_bus(rt_spi_device);
+
     /* checkout Stage 1 slave status */
     if ((resp.magic1 != SLAVE_MAGIC1) || (resp.magic2 != SLAVE_MAGIC2) || (resp.type != slave_cmd_phase))
     {
