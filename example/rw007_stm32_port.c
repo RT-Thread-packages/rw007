@@ -67,4 +67,24 @@ void spi_wifi_hw_init(void)
     rt_pin_irq_enable(RW007_INT_BUSY_PIN, RT_TRUE);
 }
 
+rt_err_t rw007_open_ble(void)
+{
+    return rw007_ble_mode_set(RW00x_BLE_ENABLE, NONAUTO_CONNECT_MODE);
+}
+MSH_CMD_EXPORT(rw007_open_ble, open rw007 ble function)
+
+rt_err_t rw007_ble_networking(void)
+{
+    struct sdio_ble_connect_info ble_connect_info;
+    rt_uint32_t ret;
+
+    ret = rw007_ble_wifi_info_get(&ble_connect_info);
+    if(ret != RT_EOK)
+    {
+        return RT_ERROR;
+    }
+    return rt_wlan_connect(ble_connect_info.ssid.val, ble_connect_info.key.val);
+}
+MSH_CMD_EXPORT(rw007_ble_networking, rw007 ble networking)
+
 #endif /* RW007_USING_STM32_DRIVERS */
