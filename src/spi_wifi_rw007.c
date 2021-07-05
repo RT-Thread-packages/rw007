@@ -1,6 +1,6 @@
 /*
  * COPYRIGHT (C) 2018, Real-Thread Information Technology Ltd
- * 
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
  * Change Logs:
@@ -9,11 +9,12 @@
  * 2014-09-18     aozima       update command & response.
  * 2017-07-28     armink       fix auto reconnect feature
  * 2018-12-24     zyh          porting rw007 from rw009
- * 2019-02-25     zyh          porting rw007 to wlan 
+ * 2019-02-25     zyh          porting rw007 to wlan
  * 2020-02-28     shaoguoji    add spi transfer retry
  * 2020-07-09     zj           refactor the rw007
  */
 #include <rtthread.h>
+#include <rthw.h>
 #include <string.h>
 
 #ifndef RW007_LOG_LEVEL
@@ -32,6 +33,8 @@ static struct rw007_spi rw007_spi;
 static struct rw007_wifi wifi_sta, wifi_ap;
 static struct rt_event spi_wifi_data_event;
 static rt_bool_t inited = RT_FALSE;
+static rw007_power_switch_t _powerswitch = rw007_power_switch_on;
+rw007_ble_recv_data_func rw007_ble_recv_cb;
 
 #ifdef WLAN_DEV_MONITOR
 typedef struct
@@ -45,9 +48,294 @@ typedef struct
 net_packet packet;
 #endif
 
-static int wifi_data_transfer(struct rw007_spi *dev, uint16_t seq, uint8_t *rx_buffer)
+#ifdef RW007_USING_SPI_TEST
+
+#define __is_print(ch) ((unsigned int)((ch) - ' ') < 127u - ' ')
+rt_inline void hex_dump(const rt_uint8_t *ptr, rt_size_t buflen)
 {
-    static const struct spi_data_packet *send_packet = RT_NULL;
+    unsigned char *buf = (unsigned char *)ptr;
+    int i, j;
+
+    RT_ASSERT(ptr != RT_NULL);
+
+    for (i = 0; i < buflen; i += 16)
+    {
+        rt_kprintf("%08X: ", i);
+
+        for (j = 0; j < 16; j++)
+            if (i + j < buflen)
+                rt_kprintf("%02X ", buf[i + j]);
+            else
+                rt_kprintf("   ");
+        rt_kprintf(" ");
+
+        for (j = 0; j < 16; j++)
+            if (i + j < buflen)
+                rt_kprintf("%c", __is_print(buf[i + j]) ? buf[i + j] : '.');
+        rt_kprintf("\n");
+    }
+}
+
+rt_thread_t tid;
+struct rw007_test_req test_req;
+struct rt_event test_event;
+struct rt_timer show_test_result_timer;
+
+struct rw007_spi_test_result test_result;
+
+struct rw007_pkg_count pkg_count;
+
+static void print_test_result(void)
+{
+    rt_kprintf("//--------------------------------\n");
+    rt_kprintf("spi port test result:\n");
+    rt_kprintf("total_count: %d\n", test_result.total_count);
+    rt_kprintf("success_count: %d\n", test_result.success_count);
+    rt_kprintf("failed_count: %d\n", test_result.failed_count);
+    rt_kprintf("timeout_count: %d\n", test_result.timeout_count);
+    rt_kprintf("//--------------------------------\n\n");
+}
+
+static void print_show_pkg_count(void)
+{
+    rt_kprintf("//--------------------------------\n");
+    rt_kprintf("spi packet count result:\n");
+    rt_kprintf("wlan_rx_count: %d\n", pkg_count.wlan_rx_count);
+    rt_kprintf("wlan_rx_loss_count: %d\n", pkg_count.wlan_rx_loss_count);
+    rt_kprintf("wlan_tx_count: %d\n", pkg_count.wlan_tx_count);
+    rt_kprintf("wlan_tx_loss_count: %d\n", pkg_count.wlan_tx_loss_count);
+    rt_kprintf("//--------------------------------\n\n");
+}
+
+static void rw007_spi_test_handle(void *param)
+{
+    int ret = 0;
+    rt_uint32_t result_event;
+    struct spi_data_packet *data_packet = NULL;
+    struct rw007_test_pack *test_packet = rt_malloc(sizeof(struct rw007_test_req) + member_offset(struct rw007_test_pack, data));
+
+    rt_event_recv(&test_event,
+                  RW007_SPI_TEST_START,
+                  RT_EVENT_FLAG_AND | RT_EVENT_FLAG_CLEAR,
+                  RT_WAITING_FOREVER,
+                  &result_event);
+    if(RW007_SPI_TEST_START == result_event)
+    {
+        while(1)
+        {
+            test_req.seq = rand() % 255 + 1;
+
+            data_packet = rt_mp_alloc(&rw007_spi.spi_tx_mp, RT_WAITING_FOREVER);
+            if(RT_NULL == data_packet)
+            {
+                LOG_E("test data packet alloc fail!");
+                continue;
+            }
+
+            test_result.total_count ++;
+            data_packet->data_type = DATA_TYPE_TEST;
+
+            test_packet->type = RW007_CAPACITY_TEST;
+            test_packet->data_len = sizeof(struct rw007_test_req);
+            rt_memcpy(test_packet->data, &test_req, test_packet->data_len);
+
+            data_packet->data_len = member_offset(struct rw007_test_pack, data) + test_packet->data_len;
+
+            rt_memcpy(data_packet->buffer, test_packet, data_packet->data_len);
+
+            rt_mb_send(&rw007_spi.spi_tx_mb, (rt_ubase_t)data_packet);
+            rt_event_send(&spi_wifi_data_event, RW007_MASTER_DATA);
+
+            ret = rt_event_recv(&test_event,
+                                RW007_SPI_TEST_SUCCESS | RW007_SPI_TEST_FAILED | RW007_SPI_TEST_STOP,
+                                RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,
+                                rt_tick_from_millisecond(1000),
+                                &result_event);
+
+            if(ret == RT_EOK && result_event == RW007_SPI_TEST_SUCCESS)
+            {
+                test_result.success_count++;
+            }
+            else if(ret == RT_EOK && RW007_SPI_TEST_FAILED)
+            {
+                test_result.failed_count++;
+            }
+            else if(ret == RT_EOK && RW007_SPI_TEST_STOP)
+            {
+                print_test_result();
+                rt_free(test_packet);
+                break;
+            }
+            else
+            {
+                test_result.timeout_count++;
+            }
+            rt_thread_delay(1);
+        }
+    }
+}
+
+static void rw007_spi_test_resp_handler(void *data, rt_uint32_t len)
+{
+    struct rw007_test_pack *test_pack = (struct rw007_test_pack *)data;
+
+    switch(test_pack->type)
+    {
+        case RW007_PKG_LOSS_TEST:
+        {
+            struct rw007_pkg_count *remote_pkg_count = (struct rw007_pkg_count *)test_pack->data;
+            pkg_count.wlan_tx_loss_count = pkg_count.wlan_tx_count - remote_pkg_count->wlan_tx_count;
+            pkg_count.wlan_rx_loss_count = remote_pkg_count->wlan_rx_count - pkg_count.wlan_rx_count;
+            pkg_count.wlan_rx_count = remote_pkg_count->wlan_rx_count;
+
+            print_show_pkg_count();
+            break;
+        }
+        case RW007_CAPACITY_TEST:
+        {
+            struct rw007_test_resp *test_resp = (struct rw007_test_resp *)test_pack->data;
+            if((test_req.seq != test_resp->seq)
+                || (test_req.len != test_resp->len)
+                || (rt_memcmp(test_req.data, test_resp->data, 10) != 0))
+            {
+                rt_event_send(&test_event, RW007_SPI_TEST_FAILED);
+            }
+            else
+            {
+                rt_event_send(&test_event, RW007_SPI_TEST_SUCCESS);
+            }
+            break;
+        }
+    }
+}
+
+static void rw007_show_test_result_handle(void *param)
+{
+    print_test_result();
+}
+
+static void rw007_spi_capacity_test_start(int argc, char **argv)
+{
+    static int first_start = 0;
+
+    test_result.total_count   = 0;
+    test_result.success_count = 0;
+    test_result.failed_count  = 0;
+    test_result.timeout_count = 0;
+
+    for(int i = 0; i < RW007_SPI_TEST_PACKET_SIZE; i++)
+    {
+        test_req.data[i] = rand() % 255;
+    }
+    test_req.len = RW007_SPI_TEST_PACKET_SIZE;
+
+    if(0 == first_start)
+    {
+        rt_event_init(&test_event, "test_evt", RT_IPC_FLAG_FIFO);
+        /* init timer */
+        rt_timer_init(&show_test_result_timer,
+                    "test_timer",
+                    rw007_show_test_result_handle,
+                    RT_NULL,
+                    1 * 1000 * 60,
+                    RT_TIMER_FLAG_PERIODIC | RT_TIMER_FLAG_SOFT_TIMER);
+        first_start = 1;
+    }
+    rt_timer_start(&show_test_result_timer);
+
+    tid = rt_thread_create("spi_test",
+                            rw007_spi_test_handle,
+                            RT_NULL,
+                            4096,
+                            10,
+                            20);
+    if(!tid)
+    {
+        return;
+    }
+    rt_thread_startup(tid);
+
+    rt_thread_delay(100);
+
+    rt_event_send(&test_event, RW007_SPI_TEST_START);
+}
+MSH_CMD_EXPORT_ALIAS(rw007_spi_capacity_test_start, rw007_capacity_test_start, spi capacity test start);
+
+static void rw007_spi_capacity_test_stop(int argc, char **argv)
+{
+    print_test_result();
+    rt_event_send(&test_event, RW007_SPI_TEST_STOP);
+    rt_thread_delete(tid);
+    rt_timer_stop(&show_test_result_timer);
+}
+MSH_CMD_EXPORT_ALIAS(rw007_spi_capacity_test_stop, rw007_capacity_test_stop, spi capacity test stop);
+
+static void rw007_wifi_pkg_count_test(int argc, char **argv)
+{
+    struct spi_data_packet *data_packet = NULL;
+    struct rw007_test_pack *test_packet = rt_malloc(sizeof(struct rw007_test_req) + member_offset(struct rw007_test_pack, data));
+
+    data_packet = rt_mp_alloc(&rw007_spi.spi_tx_mp, RT_WAITING_FOREVER);
+    if(RT_NULL == data_packet)
+    {
+        LOG_E("test data packet alloc fail!");
+        return;
+    }
+
+    data_packet->data_type = DATA_TYPE_TEST;
+
+    test_packet->type = RW007_PKG_LOSS_TEST;
+    test_packet->data_len = 0;
+
+    data_packet->data_len = member_offset(struct rw007_test_pack, data) + test_packet->data_len;
+
+    rt_memcpy(data_packet->buffer, test_packet, data_packet->data_len);
+
+    rt_mb_send(&rw007_spi.spi_tx_mb, (rt_ubase_t)data_packet);
+    rt_event_send(&spi_wifi_data_event, RW007_MASTER_DATA);
+
+    rt_free(test_packet);
+    test_packet = NULL;
+}
+MSH_CMD_EXPORT_ALIAS(rw007_wifi_pkg_count_test, rw007_pkg_count, show wifi packet count);
+
+#endif
+
+void rw007_ble_recv_data_func_reg(rw007_ble_recv_data_func recv_func_cb)
+{
+    rw007_ble_recv_cb = recv_func_cb;
+}
+
+static void rw007_ble_recv_data(void *buff, int len)
+{
+    if(rw007_ble_recv_cb)
+    {
+        rw007_ble_recv_cb(buff, len);
+    }
+}
+
+void rw007_ble_send_data(void *buff, int len)
+{
+    struct spi_data_packet * data_packet = RT_NULL;
+
+    data_packet = rt_mp_alloc(&rw007_spi.spi_tx_mp, RT_WAITING_FOREVER);
+
+    if (data_packet)
+    {
+        data_packet->data_type = DATA_TYPE_BLE;
+
+        data_packet->data_len = len;
+
+        rt_memcpy(data_packet->buffer, (const char *)buff, len);
+
+        rt_mb_send(&rw007_spi.spi_tx_mb, (rt_ubase_t)data_packet);
+        rt_event_send(&spi_wifi_data_event, RW007_MASTER_DATA);
+    }
+}
+
+static int wifi_data_transfer(struct rw007_spi *dev, uint16_t seq, uint8_t *rx_buffer, const void *tx_buffer)
+{
+    const struct spi_data_packet *send_packet = (const struct spi_data_packet*)tx_buffer;
     struct spi_master_request cmd;
     struct spi_slave_response resp;
     struct rt_spi_message message;
@@ -68,23 +356,13 @@ static int wifi_data_transfer(struct rw007_spi *dev, uint16_t seq, uint8_t *rx_b
         cmd.flag |= MASTER_FLAG_MRDY;
     }
 
-    if (send_packet == RT_NULL)
-    {
-        /* Check to see if any data needs to be sent */
-        if (rt_mb_recv(&dev->spi_tx_mb, (rt_ubase_t *)&send_packet, RT_WAITING_NO) != RT_EOK)
-        {
-            send_packet = RT_NULL;
-        }
-    }
-
     /* Set length for master to slave when data ready*/
     if (send_packet != RT_NULL)
     {
         /* Invalid data packet */
-        if((send_packet->data_len == 0) || (send_packet->data_len > SPI_MAX_DATA_LEN))
+        if ((send_packet->data_len == 0) || (send_packet->data_len > SPI_MAX_DATA_LEN))
         {
-            rt_mp_free((void *)send_packet);
-            send_packet = RT_NULL;     
+            send_packet = RT_NULL;
         }
         else
         {
@@ -149,7 +427,7 @@ static int wifi_data_transfer(struct rw007_spi *dev, uint16_t seq, uint8_t *rx_b
 
     /* Receive response from rw007 */
     rt_spi_device->bus->ops->xfer(rt_spi_device, &message);
-    
+
     /* Check response's magic word and seq */
     if ((resp.magic1 != SLAVE_MAGIC1) || (resp.magic2 != SLAVE_MAGIC2) || (resp.seq != seq) || (resp.type != slave_data_phase))
     {
@@ -196,13 +474,6 @@ static int wifi_data_transfer(struct rw007_spi *dev, uint16_t seq, uint8_t *rx_b
     /* End a SPI transmit */
     rt_spi_release_bus(rt_spi_device);
 
-    /* Free send data space */
-    if ((resp.flag & SLAVE_FLAG_SRDY) && (send_packet != RT_NULL))
-    {
-        rt_mp_free((void *)send_packet);
-        send_packet = RT_NULL;
-    }
-
     /* Parse recevied data */
     if(rx_buffer)
     {
@@ -234,13 +505,13 @@ _txerr:
     message.cs_release = 1;
     rt_spi_device->bus->ops->xfer(rt_spi_device, &message);
 
-    rt_spi_release_bus(rt_spi_device);  // End a SPI transmit 
+    rt_spi_release_bus(rt_spi_device);  // End a SPI transmit
 _cmderr:
     rt_thread_delay(1);
     return TRANSFER_DATA_ERROR;
 }
 
-static int spi_wifi_transfer(struct rw007_spi *dev)
+static int spi_wifi_transfer(struct rw007_spi *dev, const void *tx_buffer)
 {
     static uint16_t cmd_seq = 0;
     int result = TRANSFER_DATA_SUCCESS;
@@ -256,11 +527,12 @@ static int spi_wifi_transfer(struct rw007_spi *dev)
 #ifdef WLAN_DEV_MONITOR
         packet.total++;
 #endif
+
     /* set retry count */
     retry = 3;
     while (retry > 0)
     {
-        result = wifi_data_transfer(dev, cmd_seq, rx_buffer);
+        result = wifi_data_transfer(dev, cmd_seq, rx_buffer, tx_buffer);
         if (result != TRANSFER_DATA_ERROR)
         {
             break;
@@ -280,7 +552,7 @@ static int spi_wifi_transfer(struct rw007_spi *dev)
         LOG_E("rw007 transfer failed\r");
         goto _err;
     }
-    
+
     return result;
 _err:
     if(rx_buffer)
@@ -288,6 +560,93 @@ _err:
         rt_mp_free((void *)rx_buffer);
     }
     return TRANSFER_DATA_ERROR;
+}
+
+static void _wifi_buffer_free(void)
+{
+    struct spi_data_packet *send_packet = RT_NULL;
+    /* Check to see if any data needs to be sent */
+    while (rt_mb_recv(&rw007_spi.spi_tx_mb, (rt_ubase_t *)&send_packet, RT_WAITING_NO) == RT_EOK)
+    {
+        /* Free send data space */
+        if (send_packet != RT_NULL)
+        {
+            rt_mp_free((void *)send_packet);
+            send_packet = RT_NULL;
+        }
+    }
+    /* Check to see if any data needs to be sent */
+    while (rt_mb_recv(&rw007_spi.spi_rx_mb, (rt_ubase_t *)&send_packet, RT_WAITING_NO) == RT_EOK)
+    {
+        /* Free send data space */
+        if (send_packet != RT_NULL)
+        {
+            rt_mp_free((void *)send_packet);
+            send_packet = RT_NULL;
+        }
+    }
+
+    rt_kprintf("free wifi buffer\n");
+}
+
+static rw007_power_switch_cb_t _powerup_cb = 0;
+static rw007_power_switch_cb_t _powerdown_cb = 0;
+
+static void rw007_powerswitch(rw007_power_switch_t power_switch)
+{
+    static rw007_power_switch_t current_switch = rw007_power_switch_on;
+
+    if (!(power_switch != current_switch))
+    {
+        return;
+    }
+
+    current_switch = power_switch;
+
+    if (power_switch)
+    {
+        if (_powerup_cb != 0)
+        {
+            _powerup_cb();
+        }
+    }
+    else
+    {
+
+        if (_powerdown_cb != 0)
+        {
+            _powerdown_cb();
+        }
+    }
+}
+
+rt_err_t rw007_register_powerswitch_cb(rw007_power_switch_cb_t powerdown_cb, rw007_power_switch_cb_t powerup_cb)
+{
+    if (!powerdown_cb || !powerup_cb) return -RT_ERROR;
+
+    _powerup_cb = powerup_cb;
+    _powerdown_cb = powerdown_cb;
+
+    return RT_EOK;
+}
+
+rt_err_t rw007_powerswitch_request(rw007_power_switch_t power_switch)
+{
+    rt_ubase_t level;
+
+    if (!_powerdown_cb || !_powerup_cb) return -RT_EEMPTY;
+
+    level = rt_hw_interrupt_disable();
+    if (power_switch != _powerswitch)
+    {
+        _powerswitch = power_switch;
+        rt_hw_interrupt_enable(level);
+
+        return rt_event_send(&spi_wifi_data_event, RW007_POWERSWITCH);
+    }
+    rt_hw_interrupt_enable(level);
+
+    return -RT_EBUSY;
 }
 
 static void wifi_data_process_thread_entry(void *parameter)
@@ -302,11 +661,17 @@ static void wifi_data_process_thread_entry(void *parameter)
         {
             if (data_packet->data_type == DATA_TYPE_STA_ETH_DATA)
             {
+            #ifdef RW007_USING_SPI_TEST
+                pkg_count.wlan_rx_count++;
+            #endif
                 /* Ethernet package from station device */
                 rt_wlan_dev_report_data(wifi_sta.wlan, (void *)data_packet->buffer, data_packet->data_len);
             }
             else if (data_packet->data_type == DATA_TYPE_AP_ETH_DATA)
             {
+            #ifdef RW007_USING_SPI_TEST
+                pkg_count.wlan_rx_count++;
+            #endif
                 /* Ethernet package from ap device */
                 rt_wlan_dev_report_data(wifi_ap.wlan, (void *)data_packet->buffer, data_packet->data_len);
             }
@@ -333,7 +698,7 @@ static void wifi_data_process_thread_entry(void *parameter)
                 }
                 else
                 {
-                    if(resp->cmd == RT_WLAN_DEV_EVT_AP_START || resp->cmd == RT_WLAN_DEV_EVT_AP_STOP || 
+                    if(resp->cmd == RT_WLAN_DEV_EVT_AP_START || resp->cmd == RT_WLAN_DEV_EVT_AP_STOP ||
                        resp->cmd == RT_WLAN_DEV_EVT_AP_ASSOCIATED || resp->cmd == RT_WLAN_DEV_EVT_AP_DISASSOCIATED)
                     {
                         /* indicate ap device event */
@@ -368,6 +733,16 @@ static void wifi_data_process_thread_entry(void *parameter)
                     }
                 }
             }
+            else if (data_packet->data_type == DATA_TYPE_BLE)
+            {
+                rw007_ble_recv_data((void *)data_packet->buffer, data_packet->data_len);
+            }
+#ifdef RW007_USING_SPI_TEST
+            else if(data_packet->data_type == DATA_TYPE_TEST)
+            {
+                rw007_spi_test_resp_handler((void *)data_packet->buffer, data_packet->data_len);
+            }
+#endif
             /* free recv mempool memory */
             rt_mp_free((void *)data_packet);
         }
@@ -378,31 +753,68 @@ static void spi_wifi_data_thread_entry(void *parameter)
 {
     rt_bool_t empty_read = RT_TRUE;
     rt_uint32_t event;
+    rt_ubase_t send_packet = 0;
     int state;
-    
+
     while (1)
     {
         /* receive first event */
         if (rt_event_recv(&spi_wifi_data_event,
                           RW007_MASTER_DATA|
-                          RW007_SLAVE_INT,
+                          RW007_SLAVE_INT|
+                          RW007_POWERSWITCH,
                           RT_EVENT_FLAG_OR | RT_EVENT_FLAG_CLEAR,
                           RT_WAITING_FOREVER,
                           &event) != RT_EOK)
-                          
+
         {
             continue;
         }
+
+        if (event & RW007_POWERSWITCH)
+        {
+            rw007_powerswitch(_powerswitch);
+        }
+
+        if (_powerswitch != rw007_power_switch_on)
+        {
+            _wifi_buffer_free();
+
+            if (send_packet)
+            {
+                rt_mp_free((void *)send_packet);
+                send_packet = 0;
+            }
+            continue;
+        }
+
+        if (!send_packet)
+        {
+            if (rt_mb_recv(&rw007_spi.spi_tx_mb, (rt_ubase_t *)&send_packet, RT_WAITING_NO) != RT_EOK)
+            {
+                send_packet = 0;
+            }
+        }
+
         /* transfer */
-        state = spi_wifi_transfer(&rw007_spi);
+        state = spi_wifi_transfer(&rw007_spi, (const void *)send_packet);
+
+        if (state != TRANSFER_DATA_ERROR)
+        {
+            if (send_packet)
+            {
+                rt_mp_free((void *)send_packet);
+                send_packet = 0;
+            }
+        }
 
         /* Try reading again */
-        if(state == TRANSFER_DATA_CONTINUE)
+        if (state == TRANSFER_DATA_CONTINUE)
         {
             rt_event_send(&spi_wifi_data_event, RW007_SLAVE_INT);
             empty_read = RT_TRUE;
         }
-        else 
+        else
         {
             if ((state == TRANSFER_DATA_SUCCESS) && (empty_read == RT_TRUE))
             {
@@ -458,9 +870,9 @@ rt_inline rt_err_t spi_set_data(struct rt_wlan_device *wlan, RW00x_CMD COMMAND, 
     rt_uint32_t result_event;
     rt_err_t result = RT_EOK;
     spi_send_cmd(hspi, COMMAND, buffer, len);
-    if(rt_event_recv(hspi->rw007_cmd_event, 
-                    RW00x_CMD_RESP_EVENT(COMMAND), 
-                    RT_EVENT_FLAG_AND | RT_EVENT_FLAG_CLEAR, 
+    if(rt_event_recv(hspi->rw007_cmd_event,
+                    RW00x_CMD_RESP_EVENT(COMMAND),
+                    RT_EVENT_FLAG_AND | RT_EVENT_FLAG_CLEAR,
                     rt_tick_from_millisecond(10000),
                     &result_event) != RT_EOK)
     {
@@ -483,9 +895,9 @@ rt_inline rt_err_t spi_get_data(struct rt_wlan_device *wlan, RW00x_CMD COMMAND, 
     rt_uint32_t result_event;
     rt_err_t result = RT_EOK;
     spi_send_cmd(hspi, COMMAND, RT_NULL, 0);
-    if(rt_event_recv(hspi->rw007_cmd_event, 
-                    RW00x_CMD_RESP_EVENT(COMMAND), 
-                    RT_EVENT_FLAG_AND | RT_EVENT_FLAG_CLEAR, 
+    if(rt_event_recv(hspi->rw007_cmd_event,
+                    RW00x_CMD_RESP_EVENT(COMMAND),
+                    RT_EVENT_FLAG_AND | RT_EVENT_FLAG_CLEAR,
                     rt_tick_from_millisecond(10000),
                     &result_event) != RT_EOK)
     {
@@ -514,6 +926,32 @@ rt_err_t rw007_version_get(char version[16])
 {
     rt_uint32_t size_of_data;
     return spi_get_data(wifi_sta.wlan, RW00x_CMD_GET_VSR, version, &size_of_data);
+}
+
+rt_err_t rw007_cfg_ota(enum rw007_ota_enable_mode enable, enum rw007_ota_upgrade_mode upgrade_mode)
+{
+    struct rw007_ota_cfg ota_cfg;
+
+    ota_cfg.ota_enable = enable != rw007_ota_disable ? rw007_ota_enable : rw007_ota_disable;
+    ota_cfg.upgrade_mode = upgrade_mode != rw007_ota_upgrade_immediate
+                            ? rw007_ota_upgrade_manual : rw007_ota_upgrade_immediate;
+
+    // TODO: don't modify the following
+    ota_cfg.server_mode = rw007_ota_server_default;
+    ota_cfg.server_port = 5683;
+    ota_cfg.reserve = 0;
+    ota_cfg.server_url_len = 0;
+
+    return spi_set_data(wifi_sta.wlan, RW00x_CMD_CFG_OTA, &ota_cfg, sizeof(ota_cfg));
+}
+
+rt_err_t rw007_ble_cfgwifi(uint32_t duration_ms)
+{
+    struct rw007_ble_cfgwifi cfgwifi;
+
+    cfgwifi.duration_ms = duration_ms;
+
+    return spi_set_data(wifi_sta.wlan, RW00x_CMD_BLE_CFGWIFI, &cfgwifi, sizeof(struct rw007_ble_cfgwifi));
 }
 
 static rt_err_t wlan_init(struct rt_wlan_device *wlan)
@@ -689,6 +1127,10 @@ static int wlan_send(struct rt_wlan_device *wlan, void *buff, int len)
 
     rt_mb_send(&hspi->spi_tx_mb, (rt_ubase_t)data_packet);
     rt_event_send(&spi_wifi_data_event, RW007_MASTER_DATA);
+
+#ifdef RW007_USING_SPI_TEST
+    pkg_count.wlan_tx_count++;
+#endif
     return len;
 }
 
@@ -761,7 +1203,7 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name)
                &rw007_spi.spi_tx_mb_pool[0],
                SPI_TX_POOL_SIZE,
                RT_IPC_FLAG_PRIO);
-    
+
     /* init spi recv mempool */
     rt_mp_init(&rw007_spi.spi_rx_mp,
                "spi_rx",
@@ -827,6 +1269,13 @@ rt_err_t rt_hw_wifi_init(const char *spi_device_name)
 
     spi_wifi_hw_init();
 
+#ifdef RW007_USING_SPI_TEST
+    pkg_count.wlan_rx_count = 0;
+    pkg_count.wlan_rx_loss_count = 0;
+    pkg_count.wlan_tx_count = 0;
+    pkg_count.wlan_tx_loss_count = 0;
+#endif
+
     return RT_EOK;
 }
 
@@ -840,6 +1289,19 @@ void spi_wifi_isr(int vector)
 
     /* leave interrupt */
     rt_interrupt_leave();
+}
+
+void rw007_wifi_state_reset(void)
+{
+    if (inited == RT_TRUE)
+    {
+        // inited = RT_FALSE;
+        rt_wlan_dev_indicate_event_handle(wifi_sta.wlan, RT_WLAN_DEV_EVT_DISCONNECT, RT_NULL);
+        wlan_init(wifi_sta.wlan);
+        wlan_mode(wifi_sta.wlan, RT_WLAN_STATION);
+        wlan_init(wifi_ap.wlan);
+        wlan_mode(wifi_ap.wlan, RT_WLAN_AP);
+    }
 }
 
 #ifdef WLAN_DEV_MONITOR
