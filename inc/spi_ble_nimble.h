@@ -3,6 +3,9 @@
 
 #include "rtthread.h"
 
+#if defined ( __CC_ARM   )
+#pragma anon_unions
+#endif
 #define MYNEWT_VAL(x)                           MYNEWT_VAL_ ## x
 
 /* Advertising report */

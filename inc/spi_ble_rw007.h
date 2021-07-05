@@ -187,7 +187,7 @@ struct rw007_ble_write_by_uuid
     rt_uint16_t conn_handle;
     rt_uint16_t data_len;
     rw007_ble_uuid_t uuid;
-    rt_uint8_t data[0];
+    rt_uint8_t data[];
 };
 
 struct rw007_ble_read_by_uuid
