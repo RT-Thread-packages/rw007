@@ -1,6 +1,6 @@
 /*
  * COPYRIGHT (C) 2018, Real-Thread Information Technology Ltd
- * 
+ *
  * SPDX-License-Identifier: Apache-2.0
  *
  * Change Logs:
@@ -14,6 +14,65 @@
 
 #include <stdint.h>
 #include <rtdevice.h>
+
+/* SPI throughput capability and packet loss test */
+#ifdef RW007_USING_SPI_TEST
+#define RW007_SPI_TEST_PACKET_SIZE  1024
+
+typedef enum
+{
+    RW007_PKG_LOSS_TEST = 0x01,
+    RW007_CAPACITY_TEST,
+    RW007_TEST_MAX_NUM
+}RW007_TEST_TYPE;
+
+typedef enum
+{
+    RW007_SPI_TEST_START   = 1,
+    RW007_SPI_TEST_SUCCESS = 1 << 1,
+    RW007_SPI_TEST_FAILED  = 1 << 2,
+    RW007_SPI_TEST_STOP    = 1 << 3,
+}RW007_TEST_EVENT;
+
+struct rw007_test_pack
+{
+    uint16_t type;
+    uint16_t data_len;
+    uint8_t data[];
+};
+
+struct rw007_test_req
+{
+    uint16_t seq;
+    uint16_t len;
+    uint8_t data[RW007_SPI_TEST_PACKET_SIZE];
+};
+
+struct rw007_test_resp
+{
+    uint16_t seq;
+    uint16_t len;
+    uint8_t data[RW007_SPI_TEST_PACKET_SIZE];
+};
+
+struct rw007_spi_test_result
+{
+    rt_uint32_t total_count;
+    rt_uint32_t success_count;
+    rt_uint32_t failed_count;
+    rt_uint32_t timeout_count;
+};
+
+struct rw007_pkg_count
+{
+    uint32_t wlan_rx_count;
+    uint32_t wlan_rx_loss_count;
+    uint32_t wlan_tx_count;
+    uint32_t wlan_tx_loss_count;
+};
+
+#endif
+
 typedef enum
 {
     master_cmd_phase = 0x01,
@@ -78,6 +137,7 @@ typedef enum
 {
     RW007_SLAVE_INT = 1,
     RW007_MASTER_DATA = 1<<1,
+    RW007_POWERSWITCH = 1 << 2,
 } wifi_event;
 
 typedef enum
@@ -88,6 +148,10 @@ typedef enum
     DATA_TYPE_CMD,
     DATA_TYPE_RESP,
     DATA_TYPE_CB,
+    DATA_TYPE_BLE,
+#ifdef RW007_USING_SPI_TEST
+    DATA_TYPE_TEST,
+#endif
 } app_data_type_t;
 
 struct spi_data_packet
@@ -102,6 +166,39 @@ typedef struct rw007_ap_info_value
     struct rt_wlan_info info;
     char passwd[RT_WLAN_PASSWORD_MAX_LENGTH];
 } * rw007_ap_info_value_t;
+
+enum rw007_ota_enable_mode
+{
+    rw007_ota_enable = 1,
+    rw007_ota_disable = 2,
+};
+
+enum rw007_ota_upgrade_mode
+{
+    rw007_ota_upgrade_immediate = 0,
+    rw007_ota_upgrade_manual = 1,
+};
+
+enum rw007_ota_server_mode
+{
+    rw007_ota_server_default = 0,
+    rw007_ota_server_custom = 1,    // not yet supported
+};
+
+struct rw007_ota_cfg
+{
+    uint8_t ota_enable;
+    uint8_t upgrade_mode;
+    uint8_t server_mode;
+    uint8_t reserve;
+    uint16_t server_port;
+    uint16_t server_url_len;
+};
+
+struct rw007_ble_cfgwifi
+{
+    uint32_t duration_ms;
+};
 
 /* littel endian */
 typedef struct rw007_cmd
@@ -142,7 +239,7 @@ struct rw007_resp
 
 #define MAX_SPI_PACKET_SIZE (member_offset(struct spi_data_packet, buffer) + SPI_MAX_DATA_LEN)
 
-typedef enum 
+typedef enum
 {
     RW00x_CMD_INIT = 0x00,
     RW00x_CMD_SET_MODE,
@@ -168,6 +265,8 @@ typedef enum
     RW00x_CMD_GET_COUNTRY,
     RW00x_CMD_AP_MAC_GET,
     RW00x_CMD_AP_MAC_SET,
+    RW00x_CMD_CFG_OTA,
+    RW00x_CMD_BLE_CFGWIFI,
     RW00x_CMD_MAX_NUM
 }RW00x_CMD;
 
@@ -206,6 +305,18 @@ struct rw007_wifi
     struct rw007_spi * hspi;
 };
 
+typedef void (*rw007_power_switch_cb_t)(void);
+
+typedef enum
+{
+    rw007_power_switch_off = 0,
+    rw007_power_switch_on = 1,
+} rw007_power_switch_t;
+
+rt_err_t rw007_register_powerswitch_cb(rw007_power_switch_cb_t powerdown_cb, rw007_power_switch_cb_t powerup_cb);
+rt_err_t rw007_powerswitch_request(rw007_power_switch_t power_switch);
+void rw007_wifi_state_reset(void);
+
 /* porting */
 extern void spi_wifi_hw_init(void);
 
@@ -217,5 +328,15 @@ extern rt_err_t rw007_version_get(char version[16]);
 /* end api exclude in wlan framework */
 
 extern rt_err_t rt_hw_wifi_init(const char *spi_device_name);
+
+/* RW007 BLE function */
+typedef void (*rw007_ble_recv_data_func)(void *buff, int len);
+
+void rw007_ble_recv_data_func_reg(rw007_ble_recv_data_func recv_func_cb);
+void rw007_ble_send_data(void *buff, int len);
+
+rt_err_t rw007_cfg_ota(enum rw007_ota_enable_mode enable, enum rw007_ota_upgrade_mode upgrade_mode);
+
+rt_err_t rw007_ble_cfgwifi(uint32_t duration_ms);
 
 #endif /* SPI_WIFI_H_INCLUDED */

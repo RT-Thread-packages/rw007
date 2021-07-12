@@ -46,8 +46,12 @@ SOURCES          = ["src/spi_wifi_rw007.c"]
 if GetDepend(['RW007_USING_STM32_DRIVERS']):
     SOURCES     += ["example/rw007_stm32_port.c"]
 
-LOCAL_CPPPATH    = [] 
-LOCAL_CCFLAGS    = "" 
+if GetDepend(['RW007_USING_BLE']):
+    SOURCES     += ["src/spi_ble_rw007.c"]
+    SOURCES     += ["src/ble_cmd_rw007.c"]
+
+LOCAL_CPPPATH    = []
+LOCAL_CCFLAGS    = ""
 LOCAL_ASFLAGS    = ""
 
 CPPPATH          = [GetCurrentDir(), os.path.join(GetCurrentDir(), 'inc')] 
