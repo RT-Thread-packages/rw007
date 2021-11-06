@@ -46,6 +46,9 @@ SOURCES          = ["src/spi_wifi_rw007.c"]
 if GetDepend(['RW007_USING_STM32_DRIVERS']):
     SOURCES     += ["example/rw007_stm32_port.c"]
 
+if GetDepend(['RW007_USING_RENESAS_DRIVERS']):
+    SOURCES     += ["example/rw007_renesas_port.c"]
+
 LOCAL_CPPPATH    = [] 
 LOCAL_CCFLAGS    = "" 
 LOCAL_ASFLAGS    = ""
