@@ -216,7 +216,7 @@ typedef struct rw007_cmd
     } value;
 } * rw007_cmd_t;
 
-struct rw007_resp
+rt_packed(struct rw007_resp
 {
     uint32_t cmd;
     uint32_t len;
@@ -231,7 +231,7 @@ struct rw007_resp
         struct rw007_ap_info_value ap_info_value;
         char string_value[UINT16_MAX];
     } value;
-} __attribute__((packed));
+});
 
 /* tools */
 #define node_entry(node, type, member) ((type *)((char *)(node) - (unsigned long)(&((type *)0)->member)))
